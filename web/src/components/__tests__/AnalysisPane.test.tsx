@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { AnalysisPane } from "../AnalysisPane";
 import type { AnalysisView } from "../../view-models/dashboard";
@@ -96,5 +96,27 @@ describe("AnalysisPane", () => {
     expect(screen.getByRole("heading", { name: /couldn't read the requirements/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /retry extraction/i })).toBeDisabled();
     expect(screen.queryByText(/login wall/i)).not.toBeInTheDocument();
+  });
+
+  it("renders a failed fit analysis distinctly from an extraction failure, with a working retry", async () => {
+    const onRetry = vi.fn();
+    render(
+      <AnalysisPane
+        analysis={{
+          status: "analysis-failed",
+          job: { id: "snyk", title: "Platform Engineer", company: "Snyk" },
+          onRetry,
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: /the fit analysis for this posting failed/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /couldn't read the requirements/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /paste posting text/i })).not.toBeInTheDocument();
+
+    const retryButton = screen.getByRole("button", { name: /retry analysis/i });
+    expect(retryButton).toBeEnabled();
+    await userEvent.click(retryButton);
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 });

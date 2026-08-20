@@ -7,13 +7,17 @@ import { ChatDock } from "./components/ChatDock";
 import { JobRail } from "./components/JobRail";
 import { TraceDrawer } from "./components/TraceDrawer";
 import { WorkspaceEmptyState } from "./components/WorkspaceEmptyState";
+import { useAnalysisDetail, useAnalysisList } from "./hooks/useAnalysis";
 import { useDocuments } from "./hooks/useDocuments";
+import { headingFor, toAnalysisView, toJobRailItem, withSelectedVerdictCounts } from "./view-models/analysis-adapters";
 import type { AnalysisView, JobRailItem } from "./view-models/dashboard";
 
 export function App() {
   const { documents, isLoading, error, upload, paste, busy } = useDocuments();
+  const analysisList = useAnalysisList();
   const [problem, setProblem] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string>();
+  const analysisDetail = useAnalysisDetail(selectedJobId);
   const resumeInput = useRef<HTMLInputElement>(null);
   const resume = documents.find((document) => document.kind === "resume");
   const jobDocuments = useMemo(() => documents.filter((document) => document.kind === "job"), [documents]);
@@ -37,7 +41,7 @@ export function App() {
   if (isLoading) return <div className="app-loading"><span className="brand-mark" />Loading workspace…</div>;
 
   const selectedDocument = jobDocuments.find((document) => document.id === selectedJobId);
-  const analysis = selectedDocument ? toAnalysisView(selectedDocument) : null;
+  const analysis = selectedDocument ? buildAnalysisView(selectedDocument, analysisDetail) : null;
 
   return (
     <main className="workspace">
@@ -47,7 +51,7 @@ export function App() {
       <div className="workspace-body">
         <JobRail
           resume={resume ? { filename: resume.filename ?? resume.title ?? "Pasted resume", detail: resumeDetail(resume) } : null}
-          jobs={jobDocuments.map(toRailItem)}
+          jobs={jobDocuments.map((document) => buildRailItem(document, selectedJobId, analysisList, analysisDetail))}
           selectedJobId={selectedJobId}
           onSelect={setSelectedJobId}
           onAddJob={() => handlePaste("job")}
@@ -77,18 +81,44 @@ function NoJobState({ onAddJob }: { onAddJob: () => void }) {
   return <section className="empty-state"><div className="empty-card no-job-card"><p className="eyebrow">Resume indexed</p><h1>Add the first job</h1><p>Paste a posting to extract its requirements and prepare it for fit analysis.</p><button type="button" className="primary-action" onClick={onAddJob}>Add job posting</button></div></section>;
 }
 
-function toRailItem(document: DocumentSummary): JobRailItem {
-  const base = { id: document.id, title: document.title ?? document.filename ?? "Untitled role", company: document.company ?? "Company not specified" };
-  if (document.status === "failed" || document.extraction_status === "failed") return { ...base, state: "failed" };
-  if (document.extraction_status === "pending") return { ...base, state: "analysing" };
-  return { ...base, state: "unavailable" };
+// A job is only ever waiting on the analyses API once its own extraction has
+// succeeded -- pending/failed extraction states are decided from the
+// document alone, before the adapters ever look at analysis data.
+function dependsOnAnalysisData(document: DocumentSummary): boolean {
+  return document.status !== "failed" && document.extraction_status === "ready";
 }
 
-function toAnalysisView(document: DocumentSummary): AnalysisView {
-  const job = { id: document.id, title: document.title ?? document.filename ?? "Untitled role", company: document.company ?? "Company not specified" };
-  if (document.status === "failed" || document.extraction_status === "failed") return { status: "extraction-failed", job };
-  if (document.extraction_status === "pending") return { status: "analysing", job };
-  return { status: "unavailable", job };
+// `isLoading`/`error` distinguish two real situations from a confirmed
+// absence: the analyses API hasn't answered yet (first load), or it's
+// unreachable while the documents API isn't (a genuine partial outage).
+// Neither means "no analysis was ever scheduled" -- that's the adapter's
+// job to say via a 404/missing-summary, which resolves to "analysing", not
+// "unavailable". "unavailable" is reserved for these two loading/error
+// cases, which is what keeps it from ever showing for a healthy backend.
+function buildRailItem(
+  document: DocumentSummary,
+  selectedJobId: string | undefined,
+  analysisList: ReturnType<typeof useAnalysisList>,
+  analysisDetail: ReturnType<typeof useAnalysisDetail>,
+): JobRailItem {
+  if (dependsOnAnalysisData(document) && (analysisList.isLoading || analysisList.error)) {
+    return { ...headingFor(document), state: "unavailable" };
+  }
+
+  const summary = analysisList.analyses.find((entry) => entry.job_doc_id === document.id);
+  const item = toJobRailItem(document, summary);
+  return document.id === selectedJobId ? withSelectedVerdictCounts(item, analysisDetail.analysis) : item;
+}
+
+function buildAnalysisView(
+  document: DocumentSummary,
+  analysisDetail: ReturnType<typeof useAnalysisDetail>,
+): AnalysisView {
+  if (dependsOnAnalysisData(document) && (analysisDetail.isLoading || analysisDetail.error)) {
+    return { status: "unavailable", job: headingFor(document) };
+  }
+
+  return toAnalysisView(document, analysisDetail.analysis, () => analysisDetail.retry.mutate());
 }
 
 function resumeDetail(document: DocumentSummary): string {

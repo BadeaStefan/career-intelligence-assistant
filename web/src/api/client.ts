@@ -1,4 +1,10 @@
-import type { DocumentKind, DocumentSummary, PasteInput } from "./types";
+import type {
+  AnalysisDetail,
+  AnalysisSummary,
+  DocumentKind,
+  DocumentSummary,
+  PasteInput,
+} from "./types";
 
 const BASE = "/api";
 
@@ -58,6 +64,24 @@ export const apiClient = {
 
   async deleteDocument(id: string): Promise<void> {
     return unwrap<void>(await fetch(`${BASE}/documents/${id}`, { method: "DELETE" }));
+  },
+
+  async listAnalyses(): Promise<AnalysisSummary[]> {
+    return unwrap<AnalysisSummary[]>(await fetch(`${BASE}/analyses`));
+  },
+
+  // A 404 here is a real, expected state (no fit_analyses row exists yet
+  // for this job) -- it surfaces as a thrown ApiError with `.status === 404`
+  // like any other error response, distinguishable by callers that need to
+  // treat it as "not scheduled yet" rather than "request failed".
+  async getAnalysis(jobDocId: string): Promise<AnalysisDetail> {
+    return unwrap<AnalysisDetail>(await fetch(`${BASE}/analyses/${jobDocId}`));
+  },
+
+  async retryAnalysis(jobDocId: string): Promise<void> {
+    return unwrap<void>(
+      await fetch(`${BASE}/analyses/${jobDocId}/retry`, { method: "POST" }),
+    );
   },
 };
 

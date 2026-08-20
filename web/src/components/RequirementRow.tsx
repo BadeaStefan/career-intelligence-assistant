@@ -39,8 +39,9 @@ export function RequirementRow({ requirement, open, onToggle }: RequirementRowPr
             </div>
           )}
           <p className="provenance">
-            {requirement.evidence ? "retrieval score" : "best retrieval score"}{" "}
-            {requirement.retrievalScore.toFixed(2)} · {requirement.evidence ? requirement.gap ?? "1 span cited" : "below 0.45 threshold"}
+            {requirement.retrievalScore !== undefined &&
+              `${requirement.evidence ? "retrieval score" : "best retrieval score"} ${requirement.retrievalScore.toFixed(2)} · `}
+            {requirement.evidence ? requirement.gap ?? "1 span cited" : "below 0.45 threshold"}
           </p>
         </div>
       )}

@@ -997,9 +997,9 @@ Design is an explicit evaluation criterion, not leftover polish. Do this *before
 - [x] **Step 3: Implement presentation components** to the Task 15 handoff. Keep them data-source agnostic: props contain the typed view models and callbacks; components do not fetch and do not import fixtures.
 - [x] **Step 4: Integrate the currently available documents API** — empty/upload, extraction-pending, and extraction-failed states use `useDocuments()`. Until Task 14 exists, an enriched job renders an explicit “Fit analysis will appear when the analysis service is available” state; it must not render sample verdicts.
 - [x] **Step 5: Run and watch pass**
-- [ ] **Step 6: Verify the current runtime in the browser** — confirm empty/upload and real document processing states. Separately render populated presentation components in tests and confirm interactions there; do not add a fixture-powered runtime switch.
-- [ ] **Step 7: After Task 14, add `useAnalysis`** — replace the unavailable adapter with TanStack Query calls to `GET /analyses` and `GET /analyses/{job_doc_id}`, poll only while pending, and prove with a component test that the presentation tree is unchanged.
-- [ ] **Step 8: Commit** — `feat(web): add career intelligence workspace and requirement analysis views`
+- [x] **Step 6: Verify the current runtime in the browser** — confirm empty/upload and real document processing states. Separately render populated presentation components in tests and confirm interactions there; do not add a fixture-powered runtime switch.
+- [x] **Step 7: After Task 14, add `useAnalysis`** — replace the unavailable adapter with TanStack Query calls to `GET /analyses` and `GET /analyses/{job_doc_id}`, poll only while pending, and prove with a component test that the presentation tree is unchanged.
+- [x] **Step 8: Commit** — `feat(web): add career intelligence workspace and requirement analysis views`
 
 **🚩 PHASE 3 CHECKPOINT — SUBMITTABLE.** Take screenshots now, before adding anything else.
 
