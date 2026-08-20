@@ -2,14 +2,17 @@ services:
   db:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: career_intel
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-career_intel}
     ports:
-      # Exposed so the local venv can run tests against the same instance
-      # the containers use. The container is the source of truth for running
-      # the app; the venv exists for fast test runs and editor resolution.
-      - "5432:5432"
+      # Bound to loopback deliberately. Publishing "5432:5432" listens on every
+      # host interface, which combined with the development password would put
+      # an open database on whatever network this laptop joins. The API reaches
+      # Postgres over the compose network as db:5432 and does not use this
+      # mapping at all -- it exists only so the local venv can run tests
+      # against the same instance.
+      - "127.0.0.1:5432:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
       - ./infra/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
