@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from career_intel.ingest.pipeline import fail_orphaned_pending_rows
 from career_intel.models import Document
+from career_intel.models.analysis import FitAnalysis
 
 
 async def test_startup_marks_every_pending_row_failed(session: AsyncSession) -> None:
@@ -79,3 +80,30 @@ async def test_sweep_also_settles_pending_extraction(session: AsyncSession) -> N
     stored = (await session.execute(select(Document))).scalar_one()
     assert stored.status == "ready"
     assert stored.extraction_status == "failed"
+
+
+async def test_startup_sweep_fails_pending_analyses(session: AsyncSession) -> None:
+    """Extends the sweep above: spec §3 names BOTH documents and
+    fit_analyses. A fit-analysis background task dies with the process the
+    same way an enrichment task can -- the row it left at 'pending' is just
+    as provably orphaned.
+    """
+    resume = Document(
+        kind="resume", source="paste", raw_text="x", status="ready", extraction_status="ready"
+    )
+    job = Document(
+        kind="job", source="paste", raw_text="x", status="ready", extraction_status="ready"
+    )
+    session.add_all([resume, job])
+    await session.flush()
+
+    analysis = FitAnalysis(
+        resume_doc_id=resume.id, job_doc_id=job.id, status="pending", model="gpt-4o-mini"
+    )
+    session.add(analysis)
+    await session.flush()
+
+    await fail_orphaned_pending_rows(session)
+
+    await session.refresh(analysis)
+    assert analysis.status == "failed"

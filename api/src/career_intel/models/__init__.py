@@ -1,3 +1,10 @@
+from career_intel.models.analysis import (
+    FitAnalysis,
+    FitAnalysisStatus,
+    MatchEvidence,
+    RequirementMatch,
+    RequirementVerdictValue,
+)
 from career_intel.models.base import Base
 from career_intel.models.chunk import Chunk
 from career_intel.models.document import (
@@ -18,10 +25,15 @@ __all__ = [
     "DocumentSource",
     "EvidenceKind",
     "EvidenceUnit",
+    "FitAnalysis",
+    "FitAnalysisStatus",
     "LlmCall",
     "LlmCallStatus",
+    "MatchEvidence",
     "ProcessingStatus",
     "Requirement",
     "RequirementImportance",
+    "RequirementMatch",
+    "RequirementVerdictValue",
     "RetrievalTrace",
 ]
