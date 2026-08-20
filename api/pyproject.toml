@@ -27,6 +27,11 @@ dev = [
     "httpx>=0.28",
     "ruff>=0.8",
     "mypy>=1.13",
+    # Builds PDF fixtures at test time. Generating them beats committing
+    # binaries: the builder documents what each fixture contains, and the
+    # "scanned" case (a page with no text layer) is expressed as code rather
+    # than as an opaque file nobody can inspect in review.
+    "reportlab>=4.2",
 ]
 
 [build-system]
