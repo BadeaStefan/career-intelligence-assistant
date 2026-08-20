@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from career_intel.api.routes import documents
 from career_intel.db import get_session_factory
 from career_intel.ingest.pipeline import fail_orphaned_pending_rows
+from career_intel.observability import RequestIdMiddleware, configure_logging
 
 logger = structlog.get_logger(__name__)
 
@@ -29,7 +30,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    configure_logging()
+
     app = FastAPI(title="Career Intelligence Assistant", lifespan=lifespan)
+    app.add_middleware(RequestIdMiddleware)
 
     app.include_router(documents.router)
 

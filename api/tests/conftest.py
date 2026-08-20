@@ -92,6 +92,33 @@ async def session() -> AsyncIterator[AsyncSession]:
 
 
 @pytest.fixture
+def session_factory():
+    """The same session factory production code uses to write telemetry.
+
+    Exposed directly (rather than only via the ``session`` fixture) because
+    telemetry writes must each open and commit their own session -- tests
+    that assert on committed rows need to open a *fresh* one afterwards.
+    """
+    from career_intel.db import get_session_factory
+
+    return get_session_factory()
+
+
+@pytest.fixture
+def settings():
+    from career_intel.config import get_settings
+
+    return get_settings()
+
+
+@pytest.fixture
+def openai_stub():
+    from tests.fixtures.openai_stub import FakeOpenAIRaw
+
+    return FakeOpenAIRaw()
+
+
+@pytest.fixture
 def client() -> Iterator[TestClient]:
     """A TestClient against the test database.
 
