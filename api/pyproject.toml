@@ -1,0 +1,66 @@
+[project]
+name = "career-intel"
+version = "0.1.0"
+description = "Career Intelligence Assistant API"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "pgvector>=0.3.6",
+    "structlog>=24.4",
+    "openai>=1.57",
+    "tiktoken>=0.8",
+    "pypdf>=5.1",
+    "python-docx>=1.1",
+    "python-multipart>=0.0.19",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.28",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    # Builds PDF fixtures at test time. Generating them beats committing
+    # binaries: the builder documents what each fixture contains, and the
+    # "scanned" case (a page with no text layer) is expressed as code rather
+    # than as an opaque file nobody can inspect in review.
+    "reportlab>=4.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/career_intel"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not live'"
+asyncio_mode = "auto"
+# One event loop for the whole session. asyncpg binds connections to the loop
+# that created them, so a per-test loop would leave the cached engine holding
+# connections from a loop that no longer exists.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+markers = [
+    "live: hits the real OpenAI API; deselected by default",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
