@@ -66,3 +66,20 @@ RESUME_LINES = [
     "Migrated core billing services from Python to Go.",
     "Led a team of four engineers across two time zones.",
 ]
+
+
+def make_many_page_pdf(pages: int) -> bytes:
+    """A PDF with ``pages`` blank pages and no meaningful text.
+
+    Used to prove the page cap trips before any text extraction happens: a
+    5 MB file can hold thousands of pages, and parsing runs inside the
+    request.
+    """
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=LETTER)
+
+    for _ in range(pages):
+        pdf.showPage()
+
+    pdf.save()
+    return buffer.getvalue()

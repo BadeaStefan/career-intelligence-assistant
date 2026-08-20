@@ -25,6 +25,15 @@ PDFs the cause is almost always a missing text layer -- a scan -- which is the
 case worth failing loudly on.
 """
 
+MAX_PDF_PAGES = 50
+"""Upper bound on pages in an uploaded PDF.
+
+The byte cap does not bound the work. A 5 MB PDF can hold thousands of mostly
+empty pages, and parsing runs inside the request, so page count needs its own
+limit or a small upload can still occupy a worker for a long time. Generous
+enough that no real resume or job posting comes close. Spec section 8.
+"""
+
 
 class ParsedDocument(BaseModel):
     text: str
@@ -72,9 +81,19 @@ def parse_document(data: bytes, filename: str, content_type: str) -> ParsedDocum
 
 def _parse_pdf(data: bytes) -> ParsedDocument:
     reader = PdfReader(io.BytesIO(data))
+    page_count = len(reader.pages)
+
+    # Checked before extracting anything: the point of the cap is to avoid
+    # doing the work, so discovering the size after paying for it would be
+    # pointless.
+    if page_count > MAX_PDF_PAGES:
+        raise UnsupportedDocumentError(
+            f"PDF has {page_count} pages; the maximum accepted is {MAX_PDF_PAGES}."
+        )
+
     pages = [page.extract_text() or "" for page in reader.pages]
 
-    return ParsedDocument(text="\n".join(pages).strip(), page_count=len(reader.pages))
+    return ParsedDocument(text="\n".join(pages).strip(), page_count=page_count)
 
 
 def _parse_docx(data: bytes) -> ParsedDocument:

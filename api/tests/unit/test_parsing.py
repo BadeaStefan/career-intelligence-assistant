@@ -5,7 +5,13 @@ from career_intel.ingest.parsing import (
     UnsupportedDocumentError,
     parse_document,
 )
-from tests.fixtures.builders import RESUME_LINES, make_docx, make_imageonly_pdf, make_text_pdf
+from tests.fixtures.builders import (
+    RESUME_LINES,
+    make_docx,
+    make_imageonly_pdf,
+    make_many_page_pdf,
+    make_text_pdf,
+)
 
 PLAIN_RESUME = "\n".join(RESUME_LINES).encode()
 
@@ -64,3 +70,28 @@ def test_content_type_wins_over_a_misleading_extension() -> None:
     result = parse_document(make_text_pdf(RESUME_LINES), "cv.txt", "application/pdf")
 
     assert "sharded event store" in result.text
+
+
+def test_rejects_pdf_over_page_cap() -> None:
+    """A 5 MB PDF can still hold thousands of pages.
+
+    The byte cap does not bound the work: parsing runs inside the request, so
+    page count is its own limit. Spec section 8.
+    """
+    from career_intel.ingest.parsing import MAX_PDF_PAGES
+
+    oversized = make_many_page_pdf(MAX_PDF_PAGES + 1)
+
+    with pytest.raises(UnsupportedDocumentError):
+        parse_document(oversized, "long.pdf", "application/pdf")
+
+
+def test_accepts_pdf_at_the_page_cap() -> None:
+    """The cap is inclusive; a document exactly at the limit is fine."""
+    from career_intel.ingest.parsing import MAX_PDF_PAGES
+
+    at_limit = make_text_pdf(RESUME_LINES) if MAX_PDF_PAGES >= 1 else b""
+
+    result = parse_document(at_limit, "cv.pdf", "application/pdf")
+
+    assert result.page_count == 1
