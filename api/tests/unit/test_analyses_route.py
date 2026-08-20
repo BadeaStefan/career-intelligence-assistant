@@ -140,46 +140,55 @@ async def failed_analysis() -> FitAnalysis:
         return analysis
 
 
+async def _seed_ready_analysis(session: AsyncSession) -> tuple[FitAnalysis, list[Requirement]]:
+    resume, evidence_units = await _seed_resume(session)
+    job, requirements = await _seed_job(session)
+    analysis = FitAnalysis(
+        resume_doc_id=resume.id,
+        job_doc_id=job.id,
+        status="ready",
+        overall_score=0.75,
+        model="gpt-4o-mini",
+    )
+    session.add(analysis)
+    await session.flush()
+
+    strong_match = RequirementMatch(
+        fit_analysis_id=analysis.id,
+        requirement_id=requirements[0].id,
+        verdict="strong",
+        rationale="Directly matches years of Python experience.",
+    )
+    missing_match = RequirementMatch(
+        fit_analysis_id=analysis.id,
+        requirement_id=requirements[1].id,
+        verdict="missing",
+        rationale="No evidence of this skill was found.",
+    )
+    session.add_all([strong_match, missing_match])
+    await session.flush()
+
+    # evidence_units[0] has a non-null char_start/char_end -- the test
+    # asserts at least one such citation is present.
+    session.add(
+        MatchEvidence(requirement_match_id=strong_match.id, evidence_unit_id=evidence_units[0].id)
+    )
+    await session.commit()
+    await session.refresh(analysis)
+    return analysis, requirements
+
+
 @pytest_asyncio.fixture
 async def ready_analysis() -> FitAnalysis:
     async with _throwaway_session() as session:
-        resume, evidence_units = await _seed_resume(session)
-        job, requirements = await _seed_job(session)
-        analysis = FitAnalysis(
-            resume_doc_id=resume.id,
-            job_doc_id=job.id,
-            status="ready",
-            overall_score=0.75,
-            model="gpt-4o-mini",
-        )
-        session.add(analysis)
-        await session.flush()
-
-        strong_match = RequirementMatch(
-            fit_analysis_id=analysis.id,
-            requirement_id=requirements[0].id,
-            verdict="strong",
-            rationale="Directly matches years of Python experience.",
-        )
-        missing_match = RequirementMatch(
-            fit_analysis_id=analysis.id,
-            requirement_id=requirements[1].id,
-            verdict="missing",
-            rationale="No evidence of this skill was found.",
-        )
-        session.add_all([strong_match, missing_match])
-        await session.flush()
-
-        # evidence_units[0] has a non-null char_start/char_end -- the test
-        # asserts at least one such citation is present.
-        session.add(
-            MatchEvidence(
-                requirement_match_id=strong_match.id, evidence_unit_id=evidence_units[0].id
-            )
-        )
-        await session.commit()
-        await session.refresh(analysis)
+        analysis, _requirements = await _seed_ready_analysis(session)
         return analysis
+
+
+@pytest_asyncio.fixture
+async def ready_analysis_with_requirements() -> tuple[FitAnalysis, list[Requirement]]:
+    async with _throwaway_session() as session:
+        return await _seed_ready_analysis(session)
 
 
 def test_pending_analysis_returns_status_not_404(
@@ -203,6 +212,28 @@ def test_ready_analysis_returns_matches_with_citation_offsets(
     for match in body["matches"]:
         assert match["verdict"] in {"strong", "partial", "missing"}
         assert match["rationale"]
+
+
+def test_ready_analysis_matches_carry_requirement_identity(
+    client: TestClient,
+    ready_analysis_with_requirements: tuple[FitAnalysis, list[Requirement]],
+) -> None:
+    """The frontend cannot render a requirement row without its own text and
+    importance -- Task 14's response omitted these, this closes that gap."""
+    analysis, requirements = ready_analysis_with_requirements
+    body = client.get(f"/analyses/{analysis.job_doc_id}").json()
+
+    expected = {
+        str(requirement.id): (requirement.text, requirement.importance)
+        for requirement in requirements
+    }
+
+    assert len(body["matches"]) == len(expected)
+    for match in body["matches"]:
+        assert match["requirement_id"] in expected
+        expected_text, expected_importance = expected[match["requirement_id"]]
+        assert match["requirement_text"] == expected_text
+        assert match["requirement_importance"] == expected_importance
 
 
 def test_retry_on_failed_analysis_returns_202(

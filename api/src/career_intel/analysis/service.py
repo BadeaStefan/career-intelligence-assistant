@@ -24,7 +24,7 @@ from career_intel.config import get_settings
 from career_intel.db import get_session_factory
 from career_intel.llm.openai_client import OpenAIClient
 from career_intel.llm.protocol import LLMClient
-from career_intel.models import Document
+from career_intel.models import Document, Requirement
 from career_intel.models.analysis import FitAnalysis, RequirementMatch
 from career_intel.models.evidence import EvidenceUnit
 
@@ -86,6 +86,14 @@ async def get_analysis_detail(
         ).scalars()
         evidence_units = {unit.id: unit for unit in unit_rows}
 
+    requirement_ids = {match.requirement_id for match in analysis.matches}
+    requirements: dict[uuid.UUID, Requirement] = {}
+    if requirement_ids:
+        requirement_rows = (
+            await session.execute(select(Requirement).where(Requirement.id.in_(requirement_ids)))
+        ).scalars()
+        requirements = {requirement.id: requirement for requirement in requirement_rows}
+
     ordered_matches = sorted(analysis.matches, key=lambda m: _VERDICT_ORDER[m.verdict])
 
     return AnalysisDetail(
@@ -94,6 +102,14 @@ async def get_analysis_detail(
         overall_score=analysis.overall_score,
         matches=[
             RequirementMatchSummary(
+                # requirement_id is a NOT NULL FK with ON DELETE CASCADE from
+                # requirements -- if a match exists, its requirement must
+                # exist. Unlike the evidence lookup below, no defensive skip:
+                # a missing entry here means data corruption, and a KeyError
+                # is more honest than silently dropping a match.
+                requirement_id=match.requirement_id,
+                requirement_text=requirements[match.requirement_id].text,
+                requirement_importance=requirements[match.requirement_id].importance,
                 verdict=match.verdict,
                 rationale=match.rationale,
                 evidence=[

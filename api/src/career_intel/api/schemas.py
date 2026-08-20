@@ -11,7 +11,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from career_intel.models import DocumentKind, FitAnalysisStatus, RequirementVerdictValue
+from career_intel.models import (
+    DocumentKind,
+    FitAnalysisStatus,
+    RequirementImportance,
+    RequirementVerdictValue,
+)
 
 
 class PasteRequest(BaseModel):
@@ -59,6 +64,9 @@ class EvidenceSummary(BaseModel):
 
 
 class RequirementMatchSummary(BaseModel):
+    requirement_id: uuid.UUID
+    requirement_text: str
+    requirement_importance: RequirementImportance
     verdict: RequirementVerdictValue
     rationale: str
     evidence: list[EvidenceSummary]
