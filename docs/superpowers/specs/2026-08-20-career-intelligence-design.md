@@ -222,7 +222,7 @@ fit_analyses         resume_doc_id, job_doc_id, status(pending|ready|failed),
 
   └─ requirement_matches
                      fit_analysis_id, requirement_id,
-                     verdict(strong|partial|missing), score, rationale
+                     verdict(strong|partial|missing), rationale
       └─ match_evidence    requirement_match_id, evidence_unit_id
 
 chat_sessions        id, job_doc_id (nullable), scope(job|all), created_at
@@ -241,6 +241,12 @@ retrieval_traces     request_id, query, results jsonb (ids + scores)
 `char_start` / `char_end` are what make citations real: every claim in the UI
 points at an exact span of the actual resume text, not a paraphrase. They are
 computed by Python from verbatim quotes (§3), never taken from the model.
+
+`requirement_matches` deliberately carries no `score` column: the weight is
+fully derivable from `verdict` via `VERDICT_WEIGHT` (§5), so persisting it
+would store a computed value that can drift from its inputs — matching the
+project habit of keeping the spec truthful (cf. §3 update in commit
+`02069aa`).
 
 Chat citations live in a `jsonb` column while fit citations get a join table —
 a deliberate asymmetry. `match_evidence` is queried relationally (the dashboard

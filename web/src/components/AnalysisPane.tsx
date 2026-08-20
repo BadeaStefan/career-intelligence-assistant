@@ -4,8 +4,24 @@ import type { AnalysisView, RequirementView, Verdict } from "../view-models/dash
 import { PrepPane } from "./PrepPane";
 import { RequirementRow } from "./RequirementRow";
 
-export function AnalysisPane({ analysis, onRetryExtraction, onPastePosting }: { analysis: AnalysisView; onRetryExtraction?: () => void; onPastePosting?: () => void }) {
+export function AnalysisPane({
+  analysis,
+  onRetryExtraction,
+  onPastePosting,
+  retryPending,
+}: {
+  analysis: AnalysisView;
+  onRetryExtraction?: () => void;
+  onPastePosting?: () => void;
+  // Mirrors useDocuments's `busy` convention (`upload.isPending || paste.isPending`):
+  // the caller passes the retry mutation's own `isPending` flag straight
+  // through. Kept as a plain AnalysisPane prop rather than added to
+  // AnalysisView -- that type is shared, adapter-built presentation state,
+  // not a place for one mutation's live in-flight flag.
+  retryPending?: boolean;
+}) {
   if (analysis.status === "extraction-failed") return <ExtractionFailure analysis={analysis} onRetry={onRetryExtraction} onPaste={onPastePosting} />;
+  if (analysis.status === "analysis-failed") return <AnalysisFailure analysis={analysis} retryPending={retryPending} />;
   if (analysis.status === "analysing") return <AnalysingState analysis={analysis} />;
   if (analysis.status === "unavailable") return <UnavailableState analysis={analysis} />;
   return <ReadyAnalysis analysis={analysis} />;
@@ -120,6 +136,28 @@ function ExtractionFailure({ analysis, onRetry, onPaste }: { analysis: Extract<A
           <p>The posting could not be converted into a reliable requirement list. Career Intelligence will not guess requirements or generate verdicts without source text.</p>
           {(analysis.detail || analysis.sourceUrl) && <div className="technical-detail"><p>{analysis.detail}</p><p>{analysis.sourceUrl}</p></div>}
           <div className="error-actions"><button type="button" className="primary-action" disabled={!onRetry} onClick={onRetry}>Retry extraction</button><button type="button" className="secondary-action" disabled={!onPaste} onClick={onPaste}>Paste posting text instead</button></div>
+        </article>
+      </div>
+    </section>
+  );
+}
+
+function AnalysisFailure({
+  analysis,
+  retryPending,
+}: {
+  analysis: Extract<AnalysisView, { status: "analysis-failed" }>;
+  retryPending?: boolean;
+}) {
+  return (
+    <section className="analysis-pane">
+      <SimpleJobHeader job={analysis.job} suffix="0 requirements scored" />
+      <div className="analysis-scroll error-state-wrap">
+        <article className="error-panel">
+          <p className="eyebrow error-eyebrow"><span className="dot verdict-missing" />Analysis unavailable</p>
+          <h2>The fit analysis for this posting failed</h2>
+          <p>Career Intelligence could not score this posting's requirements against your resume. This can be retried without re-extracting the posting.</p>
+          <div className="error-actions"><button type="button" className="primary-action" disabled={!analysis.onRetry || retryPending} onClick={analysis.onRetry}>Retry analysis</button></div>
         </article>
       </div>
     </section>

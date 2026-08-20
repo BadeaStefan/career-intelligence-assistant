@@ -13,6 +13,7 @@ import structlog
 from sqlalchemy import case, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from career_intel.analysis.engine import run_fit_analysis, schedule_fit_analyses
 from career_intel.config import get_settings
 from career_intel.db import get_session_factory
 from career_intel.ingest.chunking import chunk_text
@@ -22,6 +23,7 @@ from career_intel.ingest.schemas import ExtractedEvidence, ExtractedRequirement
 from career_intel.llm.openai_client import OpenAIClient
 from career_intel.llm.protocol import Embedder, LLMClient
 from career_intel.models import Chunk, Document, EvidenceUnit, Requirement
+from career_intel.models.analysis import FitAnalysis
 
 logger = structlog.get_logger(__name__)
 
@@ -160,6 +162,63 @@ async def _run_enrichment(
         )
         await session.commit()
 
+    # Fires regardless of whether this document was the resume or the job,
+    # and regardless of whether its own extraction just succeeded or
+    # degraded to chunk-only: schedule_fit_analyses's own WHERE clause only
+    # ever claims pairs where both sides are actually 'ready', so calling it
+    # unconditionally is correct and a no-op when nothing qualifies. A
+    # failure here must not fail *this* document -- its own extraction_status
+    # is already settled above -- so it is caught and logged, never
+    # propagated.
+    try:
+        await _trigger_fit_analyses(session_factory, llm=llm)
+    except Exception:
+        logger.exception("fit_analysis_trigger_failed", document_id=str(document_id))
+
+
+async def _trigger_fit_analyses(
+    session_factory: async_sessionmaker[AsyncSession], *, llm: LLMClient
+) -> None:
+    """Reuses the same ``llm`` this document's own enrichment used.
+
+    Deliberately does *not* build its own ``OpenAIClient``: ``enrich_document``
+    accepts ``llm`` precisely so tests can inject a fake, and a fresh real
+    client built here would silently reach api.openai.com the moment a test
+    seeds both a ready resume and a ready job -- exactly the "no network in
+    unit tests" rule this project treats as non-negotiable.
+    """
+    async with session_factory() as session:
+        claimed_ids = await schedule_fit_analyses(session)
+        if not claimed_ids:
+            return
+        pairs = (
+            await session.execute(
+                select(
+                    FitAnalysis.resume_doc_id, FitAnalysis.job_doc_id
+                ).where(FitAnalysis.id.in_(claimed_ids))
+            )
+        ).all()
+
+    for resume_doc_id, job_doc_id in pairs:
+        try:
+            async with session_factory() as session:
+                await run_fit_analysis(
+                    session, resume_doc_id=resume_doc_id, job_doc_id=job_doc_id, llm=llm
+                )
+        except Exception:
+            # run_fit_analysis has already settled its own row at
+            # status='failed' -- including when the failure happened during
+            # its own persist step, not just during the LLM calls before it
+            # (see engine.py's module docstring) -- and, separately, already
+            # logged if even that settle attempt itself failed. This handler
+            # only stops one bad pair from blocking the rest of the
+            # newly-claimed batch.
+            logger.exception(
+                "fit_analysis_failed",
+                resume_doc_id=str(resume_doc_id),
+                job_doc_id=str(job_doc_id),
+            )
+
 
 async def _settle(session: AsyncSession, document_id: uuid.UUID, status: str) -> None:
     await session.execute(
@@ -205,6 +264,17 @@ async def fail_orphaned_pending_rows(session: AsyncSession) -> int:
         .returning(Document.id)
     )
     settled = len(result.fetchall())
+
+    # fit_analyses has the same orphaning problem: its background task also
+    # runs in-process and cannot outlive it. Spec section 3 names both
+    # documents and fit_analyses.
+    analysis_result = await session.execute(
+        update(FitAnalysis)
+        .where(FitAnalysis.status == "pending")
+        .values(status="failed")
+        .returning(FitAnalysis.id)
+    )
+    settled += len(analysis_result.fetchall())
 
     await session.commit()
 

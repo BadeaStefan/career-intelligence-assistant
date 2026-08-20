@@ -67,4 +67,22 @@ describe("JobRail", () => {
     expect(screen.getByText("failed")).toBeInTheDocument();
     expect(screen.getByText("Extraction error · 09:21")).toBeInTheDocument();
   });
+
+  it("labels a failed fit analysis distinctly from an extraction failure", () => {
+    const analysisFailedJobs: JobRailItem[] = [
+      { id: "nova", title: "Backend Engineer", company: "Nova Fintech", state: "failed", failedAt: "10:04", reason: "analysis" },
+    ];
+    render(
+      <JobRail
+        resume={{ filename: "alex-moraru-resume.pdf", detail: "2 pages · 118 spans indexed" }}
+        jobs={analysisFailedJobs}
+        selectedJobId="nova"
+        onSelect={() => undefined}
+        onAddJob={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Analysis error · 10:04")).toBeInTheDocument();
+    expect(screen.queryByText(/extraction error/i)).not.toBeInTheDocument();
+  });
 });

@@ -1,0 +1,415 @@
+"""Tests for the fit-analysis engine (Task 13).
+
+Embeddings are hand-built one-hot-ish vectors, mirroring test_retrieval.py --
+a hash-based FakeEmbedder vector gives no control over which evidence unit
+ends up nearest a given requirement, and several of these tests care about
+which candidates get offered.
+"""
+
+import asyncio
+from typing import Any
+from uuid import UUID
+
+import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from career_intel.analysis.engine import run_fit_analysis, schedule_fit_analyses
+from career_intel.constants import EMBEDDING_DIM
+from career_intel.db import get_session_factory
+from career_intel.llm.fakes import FakeLLM
+from career_intel.llm.protocol import LLMClient, T
+from career_intel.models import Document, EvidenceUnit, Requirement
+from career_intel.models.analysis import FitAnalysis, RequirementMatch
+
+
+def _vector(seed: int) -> list[float]:
+    vector = [0.0] * EMBEDDING_DIM
+    vector[seed % EMBEDDING_DIM] = 1.0
+    return vector
+
+
+async def _seed_ready_resume(session: AsyncSession, *, evidence_count: int = 3) -> Document:
+    resume = Document(
+        kind="resume", source="paste", raw_text="resume", status="ready", extraction_status="ready"
+    )
+    session.add(resume)
+    await session.flush()
+
+    for i in range(evidence_count):
+        session.add(
+            EvidenceUnit(
+                document_id=resume.id,
+                kind="skill",
+                text=f"evidence {i}",
+                char_start=None,
+                char_end=None,
+                embedding=_vector(i),
+            )
+        )
+    await session.commit()
+    await session.refresh(resume)
+    return resume
+
+
+async def _seed_job(session: AsyncSession, *, extraction_status: str = "ready") -> Document:
+    job = Document(
+        kind="job",
+        source="paste",
+        raw_text="job",
+        status="ready",
+        extraction_status=extraction_status,
+    )
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+    return job
+
+
+async def _seed_job_with_requirements(session: AsyncSession, *, count: int) -> Document:
+    job = await _seed_job(session)
+    for i in range(count):
+        session.add(
+            Requirement(
+                document_id=job.id,
+                ordinal=i,
+                text=f"requirement {i}",
+                importance="required" if i % 2 == 0 else "preferred",
+                category="general",
+                embedding=_vector(i),
+            )
+        )
+    await session.commit()
+    await session.refresh(job)
+    return job
+
+
+async def _seed_analysis(
+    session: AsyncSession,
+    *,
+    resume_doc_id: UUID | None = None,
+    job_doc_id: UUID | None = None,
+    status: str = "pending",
+) -> FitAnalysis:
+    if resume_doc_id is None:
+        resume_doc_id = (await _seed_ready_resume(session)).id
+    if job_doc_id is None:
+        job_doc_id = (await _seed_job(session)).id
+    analysis = FitAnalysis(
+        resume_doc_id=resume_doc_id,
+        job_doc_id=job_doc_id,
+        status=status,
+        model="gpt-4o-mini",
+    )
+    session.add(analysis)
+    await session.commit()
+    await session.refresh(analysis)
+    return analysis
+
+
+async def _reload(analysis: FitAnalysis) -> FitAnalysis:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(FitAnalysis)
+            .options(selectinload(FitAnalysis.matches).selectinload(RequirementMatch.evidence))
+            .where(FitAnalysis.id == analysis.id)
+        )
+        return result.scalar_one()
+
+
+def _verdict_payload(
+    handle: str, *, verdict: str = "strong", evidence_handles: list[str] | None = None
+) -> dict[str, Any]:
+    return {
+        "requirement_handle": handle,
+        "verdict": verdict,
+        "rationale": "matches",
+        "evidence_handles": evidence_handles or [],
+    }
+
+
+def _batch_response(handles: list[str], **kwargs: Any) -> dict[str, Any]:
+    return {"verdicts": [_verdict_payload(h, **kwargs) for h in handles]}
+
+
+class _ExplodingLLM:
+    """Satisfies LLMClient; always raises. No queued state needed."""
+
+    async def structured(self, *, purpose: str, system: str, user: str, schema: type[T]) -> T:
+        raise RuntimeError("boom")
+
+    async def text(self, *, purpose: str, system: str, user: str) -> str:
+        raise RuntimeError("boom")
+
+
+@pytest.fixture
+def exploding_llm() -> LLMClient:
+    return _ExplodingLLM()
+
+
+class _TransactionCheckingLLM:
+    """Wraps a FakeLLM; asserts the caller's session has no open transaction
+    before delegating each call.
+
+    This is the regression test for non-negotiable #4: run_fit_analysis must
+    never hold a transaction open on the session it was given while awaiting
+    the LLM. A session that autobegan a transaction on an earlier read and
+    was never rolled back/committed/closed before this call would fail the
+    assertion below.
+    """
+
+    def __init__(self, session: AsyncSession, inner: FakeLLM) -> None:
+        self._session = session
+        self._inner = inner
+
+    async def structured(self, *, purpose: str, system: str, user: str, schema: type[T]) -> T:
+        assert not self._session.in_transaction(), (
+            "run_fit_analysis must not hold a transaction open on the "
+            "caller's session while awaiting an LLM call"
+        )
+        return await self._inner.structured(
+            purpose=purpose, system=system, user=user, schema=schema
+        )
+
+    async def text(self, *, purpose: str, system: str, user: str) -> str:
+        return await self._inner.text(purpose=purpose, system=system, user=user)
+
+
+async def test_scores_every_requirement_not_just_retrieved_ones(session: AsyncSession) -> None:
+    """Exhaustive coverage is the whole point: top-k retrieval would
+    silently omit the requirement that mattered. Spec §1."""
+    resume = await _seed_ready_resume(session)
+    job = await _seed_job_with_requirements(session, count=14)
+    fake_llm = FakeLLM(
+        structured_responses=[
+            _batch_response([f"r{i}" for i in range(1, 11)]),
+            _batch_response([f"r{i}" for i in range(11, 15)]),
+        ]
+    )
+
+    analysis = await run_fit_analysis(
+        session, resume_doc_id=resume.id, job_doc_id=job.id, llm=fake_llm
+    )
+
+    assert len(analysis.matches) == 14
+
+
+async def test_batches_large_jobs(session: AsyncSession) -> None:
+    resume = await _seed_ready_resume(session)
+    job = await _seed_job_with_requirements(session, count=25)
+    fake_llm = FakeLLM(
+        structured_responses=[
+            _batch_response([f"r{i}" for i in range(1, 11)]),
+            _batch_response([f"r{i}" for i in range(11, 21)]),
+            _batch_response([f"r{i}" for i in range(21, 26)]),
+        ]
+    )
+
+    await run_fit_analysis(session, resume_doc_id=resume.id, job_doc_id=job.id, llm=fake_llm)
+
+    assert len(fake_llm.calls) == 3
+
+
+async def test_invented_evidence_handles_are_not_persisted(session: AsyncSession) -> None:
+    resume = await _seed_ready_resume(session, evidence_count=3)
+    job = await _seed_job_with_requirements(session, count=2)
+
+    offered_ids = set(
+        (
+            await session.execute(
+                select(EvidenceUnit.id).where(EvidenceUnit.document_id == resume.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    # lying_llm: cites "e99", which was never offered as a candidate for
+    # either requirement (each only ever gets r{n}e1..r{n}e3 -- 3 evidence
+    # units). "r1e1" is a genuinely-offered handle for r1 (but not for r2).
+    lying_llm = FakeLLM(
+        structured_responses=[_batch_response(["r1", "r2"], evidence_handles=["r1e1", "e99"])]
+    )
+
+    analysis = await run_fit_analysis(
+        session, resume_doc_id=resume.id, job_doc_id=job.id, llm=lying_llm
+    )
+
+    persisted = {e.evidence_unit_id for m in analysis.matches for e in m.evidence}
+    assert persisted, "the valid handle e1 should still have been persisted"
+    assert all(eid in offered_ids for eid in persisted)
+
+
+async def test_failure_marks_analysis_failed_not_pending(
+    session: AsyncSession, exploding_llm: LLMClient
+) -> None:
+    resume = await _seed_ready_resume(session)
+    job = await _seed_job_with_requirements(session, count=2)
+    analysis = await _seed_analysis(
+        session, resume_doc_id=resume.id, job_doc_id=job.id, status="pending"
+    )
+
+    with pytest.raises(RuntimeError):
+        await run_fit_analysis(
+            session, resume_doc_id=resume.id, job_doc_id=job.id, llm=exploding_llm
+        )
+
+    reloaded = await _reload(analysis)
+    assert reloaded.status == "failed"
+
+
+async def test_persist_failure_marks_analysis_failed_not_pending(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every LLM call can succeed and the row can still be stranded at
+    'pending' forever if the write/persist step afterward fails (an
+    IntegrityError, a dropped connection, a serialization failure) -- that
+    step must be covered by the same failure-handling as the network work
+    that precedes it, exactly like ``test_failure_marks_analysis_failed_not_pending``
+    covers the LLM-call failure window."""
+    resume = await _seed_ready_resume(session)
+    job = await _seed_job_with_requirements(session, count=2)
+    analysis = await _seed_analysis(
+        session, resume_doc_id=resume.id, job_doc_id=job.id, status="pending"
+    )
+    fake_llm = FakeLLM(structured_responses=[_batch_response(["r1", "r2"])])
+
+    async def _exploding_persist(*args: Any, **kwargs: Any) -> UUID:
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr("career_intel.analysis.engine._persist", _exploding_persist)
+
+    with pytest.raises(RuntimeError, match="write failed"):
+        await run_fit_analysis(
+            session, resume_doc_id=resume.id, job_doc_id=job.id, llm=fake_llm
+        )
+
+    reloaded = await _reload(analysis)
+    assert reloaded.status == "failed"
+
+
+async def test_retried_failure_clears_stale_overall_score(session_factory: Any) -> None:
+    """A job that went 'ready' with a real score, and is later retried and
+    fails again, must not keep reporting that stale score alongside
+    status='failed' -- GET /analyses would otherwise show e.g.
+    ``status: "failed", overall_score: 0.72`` for a score that no longer
+    corresponds to any stored verdicts."""
+    async with session_factory() as seed_session:
+        resume = await _seed_ready_resume(seed_session)
+        job = await _seed_job_with_requirements(seed_session, count=2)
+
+    fake_llm = FakeLLM(structured_responses=[_batch_response(["r1", "r2"])])
+    async with session_factory() as first_session:
+        first = await run_fit_analysis(
+            first_session, resume_doc_id=resume.id, job_doc_id=job.id, llm=fake_llm
+        )
+    assert first.overall_score is not None
+
+    async with session_factory() as retry_session:
+        with pytest.raises(RuntimeError):
+            await run_fit_analysis(
+                retry_session,
+                resume_doc_id=resume.id,
+                job_doc_id=job.id,
+                llm=_ExplodingLLM(),
+            )
+
+    reloaded = await _reload(first)
+    assert reloaded.status == "failed"
+    assert reloaded.overall_score is None
+
+
+async def test_settle_call_failure_does_not_mask_original_exception(
+    session: AsyncSession, exploding_llm: LLMClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If ``_upsert_status`` itself raises while handling the original
+    failure (e.g. the DB is unreachable -- plausibly the very reason the
+    original call failed), the ORIGINAL exception must still propagate, not
+    the settle call's own exception swallowing it."""
+    resume = await _seed_ready_resume(session)
+    job = await _seed_job_with_requirements(session, count=2)
+
+    async def _exploding_upsert(*args: Any, **kwargs: Any) -> None:
+        raise ValueError("settle also failed")
+
+    monkeypatch.setattr("career_intel.analysis.engine._upsert_status", _exploding_upsert)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await run_fit_analysis(
+            session, resume_doc_id=resume.id, job_doc_id=job.id, llm=exploding_llm
+        )
+
+
+async def test_concurrent_scheduling_claims_each_pair_once(session_factory: Any) -> None:
+    """A resume and a job can finish enrichment at nearly the same moment;
+    each background task sees the pair as newly complete. ON CONFLICT
+    DO NOTHING plus compute-only-what-you-claimed prevents double work."""
+    async with session_factory() as seed_session:
+        await _seed_ready_resume(seed_session)
+        await _seed_job(seed_session)
+
+    async with session_factory() as s1, session_factory() as s2:
+        claimed = await asyncio.gather(schedule_fit_analyses(s1), schedule_fit_analyses(s2))
+
+    assert sorted(len(c) for c in claimed) == [0, 1]
+
+
+async def test_extraction_failed_job_is_never_scheduled(session: AsyncSession) -> None:
+    """A job that degraded to chunk RAG has zero requirements; an analysis
+    over it would be a confidently empty verdict. Spec §3: such a job is
+    answerable in chat but cannot produce a fit analysis."""
+    await _seed_ready_resume(session)
+    await _seed_job(session, extraction_status="failed")
+
+    assert await schedule_fit_analyses(session) == []
+
+
+async def test_no_transaction_held_open_across_llm_call(session: AsyncSession) -> None:
+    """Non-negotiable #4: no transaction may be open on the caller's session
+    while an LLM call is in flight. run_fit_analysis reads requirements and
+    retrieves evidence on the passed-in session before ever calling the LLM;
+    that read session must be released before the first llm.structured()
+    call, not just before the final persist step."""
+    resume = await _seed_ready_resume(session)
+    job = await _seed_job_with_requirements(session, count=2)
+    inner = FakeLLM(structured_responses=[_batch_response(["r1", "r2"])])
+    checking_llm = _TransactionCheckingLLM(session, inner)
+
+    await run_fit_analysis(session, resume_doc_id=resume.id, job_doc_id=job.id, llm=checking_llm)
+
+    assert len(inner.calls) == 1, "the assertion inside structured() must actually have run"
+
+
+async def test_evidence_handles_do_not_collide_across_requirements_in_one_batch(
+    session: AsyncSession,
+) -> None:
+    """nearest_evidence assigns "e1".."ek" positionally *per call*, so two
+    requirements batched into the same prompt each show their own "e1" --
+    the same short token means a different evidence unit in each block. If
+    the prompt-facing handle weren't made batch-unique, a citation of "e1"
+    meant for one requirement could resolve, with total structural
+    legitimacy, to a different requirement's evidence unit. Every citation
+    below names the *other* requirement's handle, which must never validate
+    for this one (non-negotiable #6)."""
+    resume = await _seed_ready_resume(session, evidence_count=3)
+    job = await _seed_job_with_requirements(session, count=2)
+
+    fake_llm = FakeLLM(
+        structured_responses=[
+            {
+                "verdicts": [
+                    _verdict_payload("r1", evidence_handles=["r2e1"]),
+                    _verdict_payload("r2", evidence_handles=["r1e1"]),
+                ]
+            }
+        ]
+    )
+
+    analysis = await run_fit_analysis(
+        session, resume_doc_id=resume.id, job_doc_id=job.id, llm=fake_llm
+    )
+
+    assert len(analysis.matches) == 2
+    for match in analysis.matches:
+        assert match.evidence == [], "a cross-requirement handle must never validate"

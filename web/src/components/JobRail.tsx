@@ -76,7 +76,10 @@ export function JobRail({ resume, jobs, selectedJobId, onSelect, onAddJob }: Job
                 </>
               )}
               {job.state === "failed" && (
-                <span className="failure-meta">Extraction error{job.failedAt && ` · ${job.failedAt}`}</span>
+                <span className="failure-meta">
+                  {job.reason === "analysis" ? "Analysis error" : "Extraction error"}
+                  {job.failedAt && ` · ${job.failedAt}`}
+                </span>
               )}
               {job.state === "unavailable" && <span className="failure-meta neutral">Awaiting analysis service</span>}
             </button>
