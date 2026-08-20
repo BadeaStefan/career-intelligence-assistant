@@ -171,12 +171,22 @@ async def _run_enrichment(
     # is already settled above -- so it is caught and logged, never
     # propagated.
     try:
-        await _trigger_fit_analyses(session_factory)
+        await _trigger_fit_analyses(session_factory, llm=llm)
     except Exception:
         logger.exception("fit_analysis_trigger_failed", document_id=str(document_id))
 
 
-async def _trigger_fit_analyses(session_factory: async_sessionmaker[AsyncSession]) -> None:
+async def _trigger_fit_analyses(
+    session_factory: async_sessionmaker[AsyncSession], *, llm: LLMClient
+) -> None:
+    """Reuses the same ``llm`` this document's own enrichment used.
+
+    Deliberately does *not* build its own ``OpenAIClient``: ``enrich_document``
+    accepts ``llm`` precisely so tests can inject a fake, and a fresh real
+    client built here would silently reach api.openai.com the moment a test
+    seeds both a ready resume and a ready job -- exactly the "no network in
+    unit tests" rule this project treats as non-negotiable.
+    """
     async with session_factory() as session:
         claimed_ids = await schedule_fit_analyses(session)
         if not claimed_ids:
@@ -189,7 +199,6 @@ async def _trigger_fit_analyses(session_factory: async_sessionmaker[AsyncSession
             )
         ).all()
 
-    llm = OpenAIClient(session_factory=session_factory, settings=get_settings())
     for resume_doc_id, job_doc_id in pairs:
         try:
             async with session_factory() as session:

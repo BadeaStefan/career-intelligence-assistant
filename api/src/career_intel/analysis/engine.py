@@ -1,11 +1,29 @@
 """The fit-analysis engine (Task 13, spec §5).
 
-Mirrors ``ingest/pipeline.py``'s two-session shape: everything that talks to
-OpenAI -- per-requirement kNN retrieval and the batched structured calls --
-completes before any write transaction opens. The read that loads a
-resume's evidence and a job's requirements, and the write that persists
-verdicts, are two separate sessions, so a transaction is never held open
-across a network call (non-negotiable #4).
+Mirrors ``ingest/pipeline.py``'s two-session discipline: everything that
+talks to OpenAI -- the batched structured calls -- completes with no
+transaction open on any session. ``run_fit_analysis`` is handed the caller's
+``session`` and uses it only for reads (loading requirements, and letting
+``nearest_evidence`` run its kNN queries against it); as soon as those reads
+are done it explicitly closes that session before awaiting any LLM call --
+nothing was written, so there is nothing to commit, and a bare
+``rollback()`` is not enough: SQLAlchemy keeps a session's connection
+checked out from the pool until ``close()``, and this project's engine is
+built with ``pool_pre_ping=True``, whose checkout-time ping on the *next*
+session opened from the same pool needs the greenlet context that a
+rolled-back-but-still-checked-out connection can end up interfering with.
+``close()`` fully releases the connection, matching ``_run_enrichment``'s
+actual shape: it too closes its read session (``ingest/pipeline.py``) before
+any network call. Persisting the result afterward happens in a brand new
+session from ``session_factory``, opened only after every network call has
+returned. A transaction is never held open across an OpenAI call
+(non-negotiable #4).
+
+Every value pulled out of the read session that survives past the close
+(a requirement's id/importance/text) is copied into a plain
+``_HandledRequirement`` before the session closes, rather than keeping the
+ORM object around -- attributes on an object read from a closed session are
+not something to depend on.
 
 ``run_fit_analysis`` upserts on ``(resume_doc_id, job_doc_id)`` rather than
 assuming a ``fit_analyses`` row already exists: it works whether a caller
@@ -34,6 +52,7 @@ from career_intel.db import get_session_factory
 from career_intel.llm.protocol import LLMClient
 from career_intel.models import Document, Requirement
 from career_intel.models.analysis import FitAnalysis, MatchEvidence, RequirementMatch
+from career_intel.models.requirement import RequirementImportance
 
 logger = structlog.get_logger(__name__)
 
@@ -50,26 +69,45 @@ _SYSTEM_PROMPT = f"""You score how well a candidate's resume evidence supports e
 {_UNTRUSTED_DATA_NOTICE}
 
 Each requirement is listed with a handle (e.g. "r3") and the candidate
-evidence retrieved for it, each with its own handle (e.g. "e1", "e2").
+evidence retrieved for it. Each candidate's handle combines its requirement's
+handle with its own position (e.g. "r3e1", "r3e2") -- these combined handles
+are unique across this entire prompt, unlike the requirement handles alone.
 
 For every requirement handle listed, return exactly one verdict with:
-- requirement_handle: the same handle the requirement was given
+- requirement_handle: the same handle the requirement was given (e.g. "r3",
+  not "r3e1")
 - verdict: "strong" if the evidence clearly satisfies the requirement,
   "partial" if it is related but incomplete, "missing" if no evidence
   supports it
 - rationale: one or two sentences explaining the verdict
-- evidence_handles: the handles of the evidence that support your verdict --
-  only from the candidates offered for that specific requirement, or an
-  empty list if none apply
+- evidence_handles: the full combined handles (e.g. "r3e1") of the evidence
+  that support your verdict -- only from the candidates offered for that
+  specific requirement, or an empty list if none apply
 
 Never cite an evidence handle that was not offered for that requirement."""
 
 
 @dataclass(frozen=True)
 class _HandledRequirement:
-    requirement: Requirement
+    requirement_id: uuid.UUID
+    importance: RequirementImportance
+    text: str
     handle: str
     candidates: list[EvidenceCandidate]
+
+
+def _prompt_handle(item: _HandledRequirement, candidate: EvidenceCandidate) -> str:
+    """A handle unique across the whole batch, not just within one requirement.
+
+    ``nearest_evidence`` assigns "e1".."ek" positionally *per call*, so when
+    several requirements' candidates are rendered into one prompt, their
+    handles collide -- "e1" means a different evidence unit in each
+    requirement's block. Prefixing with the requirement's own handle (e.g.
+    "r3e1") makes every offered handle in the prompt distinct, so a citation
+    can never structurally-validly resolve to the wrong requirement's
+    evidence (non-negotiable #6).
+    """
+    return f"{item.handle}{candidate.handle}"
 
 
 async def run_fit_analysis(
@@ -106,10 +144,13 @@ async def run_fit_analysis(
         # Handles are assigned once, globally, in a stable order -- this is
         # what keeps them debuggable across batches. Each requirement's
         # evidence handles stay scoped to its own candidate list, exactly as
-        # nearest_evidence already returns them.
+        # nearest_evidence already returns them; _prompt_handle makes them
+        # collision-free once several requirements share one prompt.
         handled = [
             _HandledRequirement(
-                requirement=requirement,
+                requirement_id=requirement.id,
+                importance=requirement.importance,
+                text=requirement.text,
                 handle=f"r{index}",
                 candidates=await nearest_evidence(
                     session,
@@ -120,9 +161,16 @@ async def run_fit_analysis(
             for index, requirement in enumerate(requirements, start=1)
         ]
 
+        # All reads are done -- release this session's connection back to
+        # the pool before awaiting any LLM call (see the module docstring
+        # for why close() rather than rollback()). No transaction may be
+        # open, held, or even checked-out-but-idle on any session while the
+        # network call is in flight (non-negotiable #4).
+        await session.close()
+
         verdicts_by_handle = await _score_all_batches(llm, handled)
 
-        match_specs: list[tuple[Requirement, RequirementVerdict, list[uuid.UUID]]] = []
+        match_specs: list[tuple[uuid.UUID, RequirementVerdict, list[uuid.UUID]]] = []
         scored_items: list[ScoredRequirement] = []
         for item in handled:
             verdict = verdicts_by_handle.get(item.handle)
@@ -137,7 +185,9 @@ async def run_fit_analysis(
                     evidence_handles=[],
                 )
 
-            candidate_by_handle = {c.handle: c for c in item.candidates}
+            candidate_by_handle = {
+                _prompt_handle(item, c): c for c in item.candidates
+            }
             valid_handles = validate_handles(
                 verdict.evidence_handles, candidate_by_handle.keys()
             )
@@ -145,9 +195,9 @@ async def run_fit_analysis(
                 candidate_by_handle[handle].evidence_unit_id for handle in valid_handles
             ]
 
-            match_specs.append((item.requirement, verdict, evidence_unit_ids))
+            match_specs.append((item.requirement_id, verdict, evidence_unit_ids))
             scored_items.append(
-                ScoredRequirement(importance=item.requirement.importance, verdict=verdict.verdict)
+                ScoredRequirement(importance=item.importance, verdict=verdict.verdict)
             )
 
         overall_score = compute_overall_score(scored_items)
@@ -222,11 +272,10 @@ async def _score_all_batches(
 def _build_batch_prompt(batch: Sequence[_HandledRequirement]) -> str:
     lines: list[str] = []
     for item in batch:
-        requirement = item.requirement
-        lines.append(f"{item.handle}) [{requirement.importance}] {requirement.text}")
+        lines.append(f"{item.handle}) [{item.importance}] {item.text}")
         if item.candidates:
             for candidate in item.candidates:
-                lines.append(f"    {candidate.handle}: {candidate.text}")
+                lines.append(f"    {_prompt_handle(item, candidate)}: {candidate.text}")
         else:
             lines.append("    (no candidate evidence retrieved)")
     return "\n".join(lines)
@@ -267,7 +316,7 @@ async def _persist(
     job_doc_id: uuid.UUID,
     model: str,
     overall_score: float,
-    match_specs: Sequence[tuple[Requirement, RequirementVerdict, list[uuid.UUID]]],
+    match_specs: Sequence[tuple[uuid.UUID, RequirementVerdict, list[uuid.UUID]]],
 ) -> uuid.UUID:
     stmt = (
         pg_insert(FitAnalysis)
@@ -296,13 +345,13 @@ async def _persist(
 
     match_rows: list[RequirementMatch] = []
     evidence_rows: list[MatchEvidence] = []
-    for requirement, verdict, evidence_unit_ids in match_specs:
+    for requirement_id, verdict, evidence_unit_ids in match_specs:
         match_id = uuid.uuid4()
         match_rows.append(
             RequirementMatch(
                 id=match_id,
                 fit_analysis_id=resolved_id,
-                requirement_id=requirement.id,
+                requirement_id=requirement_id,
                 verdict=verdict.verdict,
                 rationale=verdict.rationale,
             )

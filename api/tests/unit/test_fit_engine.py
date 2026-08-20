@@ -148,6 +148,34 @@ def exploding_llm() -> LLMClient:
     return _ExplodingLLM()
 
 
+class _TransactionCheckingLLM:
+    """Wraps a FakeLLM; asserts the caller's session has no open transaction
+    before delegating each call.
+
+    This is the regression test for non-negotiable #4: run_fit_analysis must
+    never hold a transaction open on the session it was given while awaiting
+    the LLM. A session that autobegan a transaction on an earlier read and
+    was never rolled back/committed/closed before this call would fail the
+    assertion below.
+    """
+
+    def __init__(self, session: AsyncSession, inner: FakeLLM) -> None:
+        self._session = session
+        self._inner = inner
+
+    async def structured(self, *, purpose: str, system: str, user: str, schema: type[T]) -> T:
+        assert not self._session.in_transaction(), (
+            "run_fit_analysis must not hold a transaction open on the "
+            "caller's session while awaiting an LLM call"
+        )
+        return await self._inner.structured(
+            purpose=purpose, system=system, user=user, schema=schema
+        )
+
+    async def text(self, *, purpose: str, system: str, user: str) -> str:
+        return await self._inner.text(purpose=purpose, system=system, user=user)
+
+
 async def test_scores_every_requirement_not_just_retrieved_ones(session: AsyncSession) -> None:
     """Exhaustive coverage is the whole point: top-k retrieval would
     silently omit the requirement that mattered. Spec §1."""
@@ -198,9 +226,10 @@ async def test_invented_evidence_handles_are_not_persisted(session: AsyncSession
     )
 
     # lying_llm: cites "e99", which was never offered as a candidate for
-    # either requirement (each only ever gets e1..e3 -- 3 evidence units).
+    # either requirement (each only ever gets r{n}e1..r{n}e3 -- 3 evidence
+    # units). "r1e1" is a genuinely-offered handle for r1 (but not for r2).
     lying_llm = FakeLLM(
-        structured_responses=[_batch_response(["r1", "r2"], evidence_handles=["e1", "e99"])]
+        structured_responses=[_batch_response(["r1", "r2"], evidence_handles=["r1e1", "e99"])]
     )
 
     analysis = await run_fit_analysis(
@@ -252,3 +281,53 @@ async def test_extraction_failed_job_is_never_scheduled(session: AsyncSession) -
     await _seed_job(session, extraction_status="failed")
 
     assert await schedule_fit_analyses(session) == []
+
+
+async def test_no_transaction_held_open_across_llm_call(session: AsyncSession) -> None:
+    """Non-negotiable #4: no transaction may be open on the caller's session
+    while an LLM call is in flight. run_fit_analysis reads requirements and
+    retrieves evidence on the passed-in session before ever calling the LLM;
+    that read session must be released before the first llm.structured()
+    call, not just before the final persist step."""
+    resume = await _seed_ready_resume(session)
+    job = await _seed_job_with_requirements(session, count=2)
+    inner = FakeLLM(structured_responses=[_batch_response(["r1", "r2"])])
+    checking_llm = _TransactionCheckingLLM(session, inner)
+
+    await run_fit_analysis(session, resume_doc_id=resume.id, job_doc_id=job.id, llm=checking_llm)
+
+    assert len(inner.calls) == 1, "the assertion inside structured() must actually have run"
+
+
+async def test_evidence_handles_do_not_collide_across_requirements_in_one_batch(
+    session: AsyncSession,
+) -> None:
+    """nearest_evidence assigns "e1".."ek" positionally *per call*, so two
+    requirements batched into the same prompt each show their own "e1" --
+    the same short token means a different evidence unit in each block. If
+    the prompt-facing handle weren't made batch-unique, a citation of "e1"
+    meant for one requirement could resolve, with total structural
+    legitimacy, to a different requirement's evidence unit. Every citation
+    below names the *other* requirement's handle, which must never validate
+    for this one (non-negotiable #6)."""
+    resume = await _seed_ready_resume(session, evidence_count=3)
+    job = await _seed_job_with_requirements(session, count=2)
+
+    fake_llm = FakeLLM(
+        structured_responses=[
+            {
+                "verdicts": [
+                    _verdict_payload("r1", evidence_handles=["r2e1"]),
+                    _verdict_payload("r2", evidence_handles=["r1e1"]),
+                ]
+            }
+        ]
+    )
+
+    analysis = await run_fit_analysis(
+        session, resume_doc_id=resume.id, job_doc_id=job.id, llm=fake_llm
+    )
+
+    assert len(analysis.matches) == 2
+    for match in analysis.matches:
+        assert match.evidence == [], "a cross-requirement handle must never validate"
