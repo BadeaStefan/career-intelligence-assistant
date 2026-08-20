@@ -6,7 +6,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ExtractedEvidence(BaseModel):
@@ -22,7 +22,7 @@ class ResumeExtraction(BaseModel):
 class ExtractedRequirement(BaseModel):
     text: str
     importance: Literal["required", "preferred"]
-    category: str
+    category: str = Field(max_length=128)
 
 
 class JobExtraction(BaseModel):

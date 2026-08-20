@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from career_intel.ingest.extraction import extract_job, extract_resume
 from career_intel.ingest.schemas import JobExtraction, ResumeExtraction
 from career_intel.llm.fakes import FakeLLM
@@ -56,6 +59,22 @@ async def test_job_extraction_returns_none_after_two_malformed_responses():
     result = await extract_job(llm, "Looking for a backend engineer with Kubernetes")
 
     assert result is None
+
+
+def test_requirement_category_longer_than_database_column_is_rejected():
+    payload = {
+        **VALID_JOB_PAYLOAD,
+        "requirements": [
+            {
+                "text": "Kubernetes experience",
+                "importance": "required",
+                "category": "x" * 129,
+            }
+        ],
+    }
+
+    with pytest.raises(ValidationError):
+        JobExtraction.model_validate(payload)
 
 
 async def test_prompt_delimits_document_text_and_declares_it_data():

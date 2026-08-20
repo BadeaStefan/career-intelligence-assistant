@@ -8,7 +8,7 @@ from career_intel.models.document import (
 )
 from career_intel.models.evidence import EvidenceKind, EvidenceUnit
 from career_intel.models.requirement import Requirement, RequirementImportance
-from career_intel.models.telemetry import LlmCall, RetrievalTrace
+from career_intel.models.telemetry import LlmCall, LlmCallStatus, RetrievalTrace
 
 __all__ = [
     "Base",
@@ -19,6 +19,7 @@ __all__ = [
     "EvidenceKind",
     "EvidenceUnit",
     "LlmCall",
+    "LlmCallStatus",
     "ProcessingStatus",
     "Requirement",
     "RequirementImportance",

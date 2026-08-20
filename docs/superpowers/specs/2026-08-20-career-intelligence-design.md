@@ -459,9 +459,13 @@ vibes.
 
 ## 10. Observability
 
-`structlog` JSON logging with a request-id middleware. Every LLM call writes an
-`llm_calls` row (model, tokens, latency, computed cost); every retrieval writes a
-`retrieval_traces` row (ids + scores). These feed the UI drawer.
+`structlog` JSON logging with a request-id middleware. Every attempted LLM call
+writes an `llm_calls` row. Successful calls include model, tokens, latency, and
+computed cost; provider failures include model, latency, a safe exception-class
+name, and null usage/cost rather than invented zeroes. Every retrieval writes a
+`retrieval_traces` row (ids + scores). These feed the UI drawer. Valid inbound
+request ids are limited to the database's 64-character boundary; invalid values
+are replaced with a generated UUID.
 
 Nearly free — the calls are already being made — and real numbers on screen are a
 better answer to "how would you monitor this?" than a paragraph about Datadog.

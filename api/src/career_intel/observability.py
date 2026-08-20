@@ -19,6 +19,12 @@ from starlette.responses import Response
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 
 
+def _request_id(inbound: str | None) -> str:
+    if inbound and len(inbound) <= 64 and inbound.isascii():
+        return inbound
+    return str(uuid4())
+
+
 def configure_logging() -> None:
     """JSON structlog output with the request id merged into every line."""
     structlog.configure(
@@ -40,7 +46,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        request_id = request.headers.get("X-Request-ID") or str(uuid4())
+        request_id = _request_id(request.headers.get("X-Request-ID"))
         token = request_id_var.set(request_id)
         structlog.contextvars.bind_contextvars(request_id=request_id)
         try:

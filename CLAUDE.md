@@ -77,7 +77,3 @@ docker compose up --build
 
 Conventional commits. Explain *why* in the body, not what — the diff already
 says what. End messages with:
-
-```
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-```

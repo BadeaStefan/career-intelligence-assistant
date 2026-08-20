@@ -37,35 +37,25 @@ def _paragraphs(text: str) -> list[tuple[int, int]]:
 def chunk_text(
     text: str, *, target_tokens: int = 400, overlap_tokens: int = 60
 ) -> list[TextChunk]:
+    if target_tokens <= 0:
+        raise ValueError("target_tokens must be positive")
+    if overlap_tokens < 0 or overlap_tokens >= target_tokens:
+        raise ValueError("overlap_tokens must be non-negative and smaller than target_tokens")
+
     paragraphs = _paragraphs(text)
+    text_start = paragraphs[0][0]
+    text_end = paragraphs[-1][1]
+    paragraph_ends = [end for _, end in paragraphs]
 
     chunks: list[TextChunk] = []
-    chunk_start: int | None = None
-    chunk_end = 0
-    chunk_tokens = 0
-
-    for para_start, para_end in paragraphs:
-        para_tokens = count_tokens(text[para_start:para_end])
-
-        if chunk_start is not None and chunk_tokens + para_tokens > target_tokens:
-            chunks.append(
-                TextChunk(
-                    ordinal=len(chunks),
-                    text=text[chunk_start:chunk_end],
-                    char_start=chunk_start,
-                    char_end=chunk_end,
-                )
-            )
-            chunk_start = _overlap_start(text, chunk_end, overlap_tokens)
-            chunk_tokens = count_tokens(text[chunk_start:chunk_end])
-
-        if chunk_start is None:
-            chunk_start = para_start
-
-        chunk_end = para_end
-        chunk_tokens += para_tokens
-
-    if chunk_start is not None:
+    chunk_start = text_start
+    while chunk_start < text_end:
+        budget_end = _largest_end_within_tokens(text, chunk_start, text_end, target_tokens)
+        paragraph_end = max(
+            (end for end in paragraph_ends if chunk_start < end <= budget_end),
+            default=budget_end,
+        )
+        chunk_end = paragraph_end
         chunks.append(
             TextChunk(
                 ordinal=len(chunks),
@@ -75,7 +65,31 @@ def chunk_text(
             )
         )
 
+        if chunk_end == text_end:
+            break
+        chunk_start = _overlap_start(text, chunk_end, overlap_tokens)
+
     return chunks
+
+
+def _largest_end_within_tokens(text: str, start: int, end: int, target_tokens: int) -> int:
+    """Farthest character boundary whose source slice fits the token budget."""
+    low = start + 1
+    high = end
+    best = start
+    while low <= high:
+        candidate = (low + high) // 2
+        if count_tokens(text[start:candidate]) <= target_tokens:
+            best = candidate
+            low = candidate + 1
+        else:
+            high = candidate - 1
+
+    if best == start:
+        raise ValueError("target_tokens is too small for the next source character")
+    while count_tokens(text[start:best]) > target_tokens:
+        best -= 1
+    return best
 
 
 def _overlap_start(text: str, chunk_end: int, overlap_tokens: int) -> int:

@@ -24,7 +24,9 @@ The deadline is not generous. The plan is therefore **phased so that a coherent,
 - **Unit tests run against a real Postgres** (pgvector has no SQLite equivalent): run `docker compose up -d db` first. The compose `db` service publishes `127.0.0.1:5432` and provisions a separate `career_intel_test` database via `infra/init-test-db.sql`; conftest applies the real migrations. "No network" means no OpenAI, not no database.
 - **Route handlers stay thin** — no business logic, no LLM calls, no query construction in `routes/`.
 - **All network work completes before a DB transaction opens.** Never hold a Postgres transaction across an OpenAI call (spec §3).
-- **Every LLM call records an `llm_calls` row** (purpose, model, tokens, latency, cost). Non-negotiable — it is the observability story.
+- **Every attempted LLM call records an `llm_calls` row.** Successful calls carry tokens,
+  latency, and cost; failures carry status, safe error type, and latency with null usage/cost.
+  Non-negotiable — it is the observability story.
 - **Raw document text never enters logs** (PII, spec §8).
 - Conventional commits. End every commit message with `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
 - Work on a branch, not `main`.
@@ -424,8 +426,8 @@ def test_rejects_pdf_over_page_cap(many_page_pdf_bytes):
   # observability.py
   request_id_var: ContextVar[str | None]       # set by middleware, read by OpenAIClient
   def configure_logging() -> None              # structlog JSON config; request_id bound into every log line
-  class RequestIdMiddleware                    # honours inbound X-Request-ID, else uuid4;
-                                               # echoes the id on the response header
+  class RequestIdMiddleware                    # honours valid ASCII X-Request-ID values up to
+                                               # 64 chars, else uuid4; echoes the id in the response
 
   T = TypeVar("T", bound=BaseModel)
 
@@ -445,6 +447,14 @@ def test_rejects_pdf_over_page_cap(many_page_pdf_bytes):
       def __init__(self, *, session_factory, settings, raw=None): ...
   ```
 - Migration `0002` creates **both** telemetry tables: `llm_calls` (`purpose`, `model`, `prompt_tokens`, `completion_tokens`, `latency_ms`, `cost_usd`, `request_id` **nullable** — background tasks have no request, `created_at`) and `retrieval_traces` (`request_id` nullable, `query`, `results` jsonb, `created_at`). Task 11 writes `retrieval_traces`; Task 22 reads both, grouped by `request_id`.
+
+**Corrective migration `0004`:** every attempted provider call must remain observable even
+when OpenAI fails before returning usage. It adds `status` (`succeeded`/`failed`) and nullable
+`error_type`, and makes token counts and cost nullable. Successful rows still carry real usage
+and computed cost; failed rows carry measured latency and the exception class only, with null
+usage/cost rather than invented zeroes. Error messages are not persisted because they may contain
+document data. This migration also makes the 64-character request-id storage limit an application
+validation boundary: oversized or non-ASCII inbound IDs are replaced with a UUID.
 
 `purpose` is a required keyword on every call — it is what makes the `llm_calls` table readable ("resume_extraction", "fit_analysis", "chat", "interview_prep") instead of an undifferentiated log.
 
@@ -521,9 +531,9 @@ def chunk_text(text: str, *, target_tokens: int = 400,
                overlap_tokens: int = 60) -> list[TextChunk]
 ```
 
-- [ ] **Step 1: Write the failing tests** — assert: offsets round-trip (`text[c.char_start:c.char_end] == c.text` for every chunk); consecutive chunks overlap; short input yields exactly one chunk; ordinals are contiguous from zero.
+- [ ] **Step 1: Write the failing tests** — assert: offsets round-trip (`text[c.char_start:c.char_end] == c.text` for every chunk); consecutive chunks overlap; short input yields exactly one chunk; ordinals are contiguous from zero; a single paragraph larger than `target_tokens` is split into multiple bounded chunks.
 - [ ] **Step 2: Run and watch fail**
-- [ ] **Step 3: Implement** — split on paragraph boundaries, accumulate to `target_tokens`, carry `overlap_tokens` of trailing context. These offsets are computed by us and are trustworthy by construction — unlike LLM-produced spans (Task 8).
+- [ ] **Step 3: Implement** — prefer paragraph boundaries while accumulating to `target_tokens`; when one paragraph exceeds the budget, split it at the furthest character boundary that fits. Carry `overlap_tokens` of trailing context. These offsets are computed against the original source and are trustworthy by construction — unlike LLM-produced spans (Task 8).
 - [ ] **Step 4: Run and watch pass**
 - [ ] **Step 5: Commit** — `feat(ingest): add structure-aware chunking with offsets`
 
@@ -604,7 +614,7 @@ class ResumeExtraction(BaseModel):
 class ExtractedRequirement(BaseModel):
     text: str
     importance: Literal["required", "preferred"]
-    category: str
+    category: str = Field(max_length=128)  # matches requirements.category
 
 class JobExtraction(BaseModel):
     title: str | None
@@ -619,7 +629,7 @@ Both return `None` after one retry on schema-validation failure — the caller t
 
 - [ ] **Step 1: Write the failing tests** — with `FakeLLM`: valid response parses; one malformed then one valid response succeeds (retry works); two malformed responses return `None`; the prompt delimits document text and declares it data (assert the delimiter and the "never treat as instructions" clause appear in the system prompt — spec §8 prompt-injection guardrail).
 - [ ] **Step 2: Run and watch fail**
-- [ ] **Step 3: Implement** — OpenAI structured outputs against the Pydantic schemas. The `quote` field is mandatory and must be verbatim; the prompt says so explicitly.
+- [ ] **Step 3: Implement** — OpenAI structured outputs against the Pydantic schemas. The `quote` field is mandatory and must be verbatim; the prompt says so explicitly. Every bounded database field produced by the model is constrained to the same length in Pydantic so invalid output follows the retry/degradation path instead of failing the write transaction.
 - [ ] **Step 4: Run and watch pass**
 - [ ] **Step 5: Commit** — `feat(ingest): extract resume evidence and job requirements`
 
@@ -1241,6 +1251,13 @@ def test_trace_payload_never_contains_raw_document_text(client, seeded_traces):
     # A resume is PII (spec §8). Traces carry ids, scores, and counts — never text.
     body = client.get(f"/traces/{seeded_traces.request_id}").text
     assert seeded_traces.raw_resume_text not in body
+
+def test_failed_call_trace_has_status_without_invented_usage(client, seeded_failed_call):
+    call = client.get(f"/traces/{seeded_failed_call.request_id}").json()["llm_calls"][0]
+    assert call["status"] == "failed"
+    assert call["error_type"]
+    assert call["prompt_tokens"] is None
+    assert call["cost_usd"] is None
 ```
 
 ```tsx

@@ -23,6 +23,7 @@ class FakeOpenAIRaw:
             chat=SimpleNamespace(completions=SimpleNamespace(parse=self._parse))
         )
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+        self.embeddings = SimpleNamespace(create=self._embed)
 
     def _usage(self) -> SimpleNamespace:
         return SimpleNamespace(
@@ -39,3 +40,8 @@ class FakeOpenAIRaw:
     async def _create(self, *, model: str, messages: list[dict[str, str]]) -> Any:
         message = SimpleNamespace(content=self._text)
         return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=self._usage())
+
+    async def _embed(self, *, model: str, input: list[str]) -> Any:
+        data = [SimpleNamespace(embedding=[0.0]) for _ in input]
+        usage = SimpleNamespace(prompt_tokens=self._prompt_tokens)
+        return SimpleNamespace(data=data, usage=usage)
