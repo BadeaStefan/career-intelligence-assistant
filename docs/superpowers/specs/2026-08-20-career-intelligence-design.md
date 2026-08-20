@@ -95,13 +95,22 @@ locally — `BackgroundTasks` gives the same non-blocking UX with none of the
 infrastructure, and the seam where a queue slots in is exactly this one
 function.
 
-**Crash recovery.** Background tasks run inside the API process, so a container
-restart mid-ingest would otherwise strand a row at `pending` forever while the
-frontend polls it forever. On startup, any `documents` or `fit_analyses` row
-still `pending` after more than `STALE_PENDING_MINUTES` is marked `failed` with
-a retry available. This turns an invisible hang into a visible, recoverable
-error — the honest limitation of the in-process shortcut, handled rather than
-hidden.
+**Crash recovery.** Background tasks run inside the API process, so a row can be
+stranded at `pending` two ways. Both are closed:
+
+1. **Process death.** On startup, *every* `documents` and `fit_analyses` row
+   still `pending` is marked `failed`, with no age check. An in-process task
+   cannot survive a restart by definition, so a row that is `pending` when the
+   process boots is provably orphaned — its task died with the previous process.
+   An age threshold would be actively harmful here: a row younger than the
+   threshold at boot would survive the sweep and then hang forever, since
+   nothing remains to finish it.
+2. **Task exception.** The task body is wrapped so that any exception marks its
+   row `failed` before propagating.
+
+Together these guarantee every path out of `pending` terminates. Failures are
+retryable from the UI. This is the honest limitation of the in-process
+shortcut — handled rather than hidden.
 
 ```
 file upload (PDF/DOCX/TXT)  ─┐
@@ -312,7 +321,25 @@ Chat has two scopes, chosen by an **explicit toggle in the chat header**:
 "this job"  (default)  → job spec + its cached analysis + top-k resume chunks
 "all jobs"             → every job's summary + every cached fit analysis
                          + top-k resume chunks
+
+both scopes        also → last N conversation turns
 ```
+
+### Context management
+
+Every request also carries the **last 8 turns** of the session, capped at
+~1500 tokens; when the cap is exceeded the oldest turns are dropped first.
+Without this, follow-ups like "what about that second gap?" have no referent.
+
+Dropped turns are **not** summarised. Summarisation is a second LLM call in the
+hot path that can itself hallucinate, and at this corpus size a session long
+enough to need it is already an outlier. Truncation is visible and predictable;
+the README notes it as a deliberate limit and summarisation as the next step if
+sessions grow.
+
+Rough budget for a `this job` request: ~800 tokens job spec, ~600 analysis,
+~1000 chunks, ~1500 history, leaving ample headroom. The `all jobs` scope
+substitutes analyses for the single job spec and stays under ~4000.
 
 Cross-job comparison needs no special retrieval machinery. A cached analysis is
 an overall score plus ~15 short requirement verdicts; three jobs is 1–2k tokens
@@ -442,9 +469,9 @@ installs from the same lockfile, so local venv and container are provably
 identical. Local `api/.venv` exists for editor resolution and fast test runs;
 the container remains the source of truth for running the app.
 
-Config via `pydantic-settings`, `.env.example` committed, `.env` ignored.
-`STALE_PENDING_MINUTES` (§3 crash recovery) lives here. The embedding dimension
-does **not** — it is a code constant, for the reason given in §4.
+Config via `pydantic-settings`, `.env.example` committed, `.env` ignored. The
+embedding dimension is **not** a setting — it is a code constant, for the reason
+given in §4.
 
 ---
 
