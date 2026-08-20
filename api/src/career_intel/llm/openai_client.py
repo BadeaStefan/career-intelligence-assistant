@@ -38,7 +38,20 @@ class OpenAIClient:
     ) -> None:
         self._session_factory = session_factory
         self._settings = settings
-        self._raw = raw if raw is not None else AsyncOpenAI(api_key=settings.openai_api_key)
+        self._raw_override = raw
+        self._lazy_raw: AsyncOpenAI | None = None
+
+    @property
+    def _raw(self) -> AsyncOpenAI:
+        # Built lazily, on first real call, rather than in __init__: a
+        # client constructed but never used (the common shape when
+        # enrich_document builds one "just in case" fakes weren't passed)
+        # must not require live credentials to exist.
+        if self._raw_override is not None:
+            return self._raw_override
+        if self._lazy_raw is None:
+            self._lazy_raw = AsyncOpenAI(api_key=self._settings.openai_api_key)
+        return self._lazy_raw
 
     async def structured(self, *, purpose: str, system: str, user: str, schema: type[T]) -> T:
         start = time.monotonic()

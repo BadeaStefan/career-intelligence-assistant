@@ -15,6 +15,23 @@ JOB_TEXT = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _stub_background_enrichment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests exercise the HTTP contract, not enrichment.
+
+    ``client`` runs FastAPI's BackgroundTasks synchronously, and enrichment
+    now makes real Embedder/LLMClient calls when nothing is injected --
+    coverage for that path belongs to test_ingest_pipeline.py, which injects
+    fakes directly. Stubbed here so an upload/paste under TestClient never
+    reaches the network.
+    """
+
+    async def _noop(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr("career_intel.api.routes.documents.enrich_document", _noop)
+
+
 def test_upload_stores_parsed_text(client: TestClient) -> None:
     response = client.post(
         "/documents/upload",
