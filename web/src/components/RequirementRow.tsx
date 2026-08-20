@@ -35,13 +35,15 @@ export function RequirementRow({ requirement, open, onToggle }: RequirementRowPr
           ) : (
             <div className="citation citation-missing citation-empty">
               <p className="citation-label">No evidence found</p>
-              <p>{requirement.nearestMiss ?? "No resume span cleared the retrieval threshold."}</p>
+              <p>{requirement.nearestMiss ?? "No resume evidence was cited for this requirement."}</p>
             </div>
           )}
           <p className="provenance">
             {requirement.retrievalScore !== undefined &&
               `${requirement.evidence ? "retrieval score" : "best retrieval score"} ${requirement.retrievalScore.toFixed(2)} · `}
-            {requirement.evidence ? requirement.gap ?? "1 span cited" : "below 0.45 threshold"}
+            {requirement.evidence
+              ? requirement.gap ?? "1 span cited"
+              : requirement.retrievalScore === undefined && "no spans cited"}
           </p>
         </div>
       )}

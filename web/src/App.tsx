@@ -7,20 +7,32 @@ import { ChatDock } from "./components/ChatDock";
 import { JobRail } from "./components/JobRail";
 import { TraceDrawer } from "./components/TraceDrawer";
 import { WorkspaceEmptyState } from "./components/WorkspaceEmptyState";
-import { useAnalysisDetail, useAnalysisList } from "./hooks/useAnalysis";
+import { shouldPollAnalysisList, useAnalysisDetail, useAnalysisList } from "./hooks/useAnalysis";
 import { useDocuments } from "./hooks/useDocuments";
 import { headingFor, toAnalysisView, toJobRailItem, withSelectedVerdictCounts } from "./view-models/analysis-adapters";
 import type { AnalysisView, JobRailItem } from "./view-models/dashboard";
 
 export function App() {
   const { documents, isLoading, error, upload, paste, busy } = useDocuments();
-  const analysisList = useAnalysisList();
+  const jobDocuments = useMemo(() => documents.filter((document) => document.kind === "job"), [documents]);
+
+  // useAnalysisList's own refetchInterval option needs, on this render,
+  // whether anything could still change -- which in turn depends on the
+  // analyses data this very call returns. A ref carries the previous
+  // render's answer forward as this render's poll decision, then is
+  // refreshed immediately below for the *next* render; the lag this
+  // introduces is at most one re-render, and useDocuments's own 2s poll
+  // (firing whenever any job is still mid-extraction) guarantees one keeps
+  // happening on its own while anything is in flight.
+  const shouldPollAnalysesRef = useRef(true);
+  const analysisList = useAnalysisList(shouldPollAnalysesRef.current);
+  shouldPollAnalysesRef.current = shouldPollAnalysisList(jobDocuments, analysisList.analyses);
+
   const [problem, setProblem] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string>();
   const analysisDetail = useAnalysisDetail(selectedJobId);
   const resumeInput = useRef<HTMLInputElement>(null);
   const resume = documents.find((document) => document.kind === "resume");
-  const jobDocuments = useMemo(() => documents.filter((document) => document.kind === "job"), [documents]);
 
   useEffect(() => {
     if (!jobDocuments.some((document) => document.id === selectedJobId)) setSelectedJobId(jobDocuments[0]?.id);
@@ -57,7 +69,7 @@ export function App() {
           onAddJob={() => handlePaste("job")}
         />
         <section className="center-column">
-          {!resume ? <WorkspaceEmptyState onChooseFile={() => resumeInput.current?.click()} onFile={(file) => handleUpload(file, "resume")} onPaste={() => handlePaste("resume")} /> : analysis ? <AnalysisPane analysis={analysis} /> : <NoJobState onAddJob={() => handlePaste("job")} />}
+          {!resume ? <WorkspaceEmptyState onChooseFile={() => resumeInput.current?.click()} onFile={(file) => handleUpload(file, "resume")} onPaste={() => handlePaste("resume")} /> : analysis ? <AnalysisPane analysis={analysis} onPastePosting={() => handlePaste("job")} retryPending={analysisDetail.retry.isPending} /> : <NoJobState onAddJob={() => handlePaste("job")} />}
           <TraceDrawer connected={false} />
         </section>
         <ChatDock

@@ -71,6 +71,33 @@ describe("AnalysisPane", () => {
     await userEvent.click(screen.getByRole("button", { name: /kubernetes in production/i }));
     expect(screen.getByText("No evidence found")).toBeInTheDocument();
     expect(screen.getByText(/docker compose for local parity/i)).toBeInTheDocument();
+    // No fabricated retrieval threshold: the backend has no such cutoff, so
+    // the citation-empty copy must never assert one.
+    expect(screen.queryByText(/threshold/i)).not.toBeInTheDocument();
+  });
+
+  it("never invents a retrieval threshold when a requirement has no citation and no retrieval score", async () => {
+    const requirementsWithoutScore: AnalysisView = {
+      ...analysis,
+      requirements: [
+        {
+          id: "terraform",
+          text: "Terraform in production",
+          importance: "preferred",
+          verdict: "missing",
+          rationale: "No infrastructure-as-code evidence in the document.",
+          // Real API data never carries a per-match retrieval score --
+          // this fixture matches that shape (see view-models/dashboard.ts).
+        },
+      ],
+    };
+    render(<AnalysisPane analysis={requirementsWithoutScore} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /terraform in production/i }));
+    expect(screen.getByText("No evidence found")).toBeInTheDocument();
+    expect(screen.getByText("No resume evidence was cited for this requirement.")).toBeInTheDocument();
+    expect(screen.queryByText(/threshold/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/retrieval score/i)).not.toBeInTheDocument();
   });
 
   it("switches to interview preparation without fetching", async () => {
@@ -118,5 +145,41 @@ describe("AnalysisPane", () => {
     expect(retryButton).toBeEnabled();
     await userEvent.click(retryButton);
     expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables the retry-analysis button while a retry is already in flight", () => {
+    const onRetry = vi.fn();
+    render(
+      <AnalysisPane
+        analysis={{
+          status: "analysis-failed",
+          job: { id: "snyk", title: "Platform Engineer", company: "Snyk" },
+          onRetry,
+        }}
+        retryPending
+      />,
+    );
+
+    // Guards the narrow 409 race: a second click landing before the row
+    // flips out of "failed" must not be able to fire a second retry.
+    expect(screen.getByRole("button", { name: /retry analysis/i })).toBeDisabled();
+  });
+
+  it("wires a working paste-posting recovery action for a failed extraction", async () => {
+    const onPaste = vi.fn();
+    render(
+      <AnalysisPane
+        analysis={{
+          status: "extraction-failed",
+          job: { id: "snyk", title: "Platform Engineer", company: "Snyk" },
+        }}
+        onPastePosting={onPaste}
+      />,
+    );
+
+    const pasteButton = screen.getByRole("button", { name: /paste posting text/i });
+    expect(pasteButton).toBeEnabled();
+    await userEvent.click(pasteButton);
+    expect(onPaste).toHaveBeenCalledTimes(1);
   });
 });
