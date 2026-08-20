@@ -1,0 +1,23 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: career_intel
+    ports:
+      # Exposed so the local venv can run tests against the same instance
+      # the containers use. The container is the source of truth for running
+      # the app; the venv exists for fast test runs and editor resolution.
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./infra/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d career_intel"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  db_data:
