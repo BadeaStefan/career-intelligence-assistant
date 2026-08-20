@@ -120,9 +120,12 @@ async def run_fit_analysis(
     """Score every requirement of ``job_doc_id`` against ``resume_doc_id``'s
     evidence, and persist the result.
 
-    Any failure before the persist step settles the analysis at
-    ``status='failed'`` (never leaving it at ``'pending'``) and re-raises --
-    same shape as ``ingest/pipeline.py``'s ``enrich_document``.
+    Any failure -- including a failure of the persist step itself, e.g. an
+    ``IntegrityError``, a dropped connection, or a serialization failure --
+    settles the analysis at ``status='failed'`` (never leaving it at
+    ``'pending'``, which is exactly the status the retry endpoint refuses to
+    retry) and re-raises -- same shape as ``ingest/pipeline.py``'s
+    ``enrich_document``.
     """
     session_factory = get_session_factory()
     analysis_id = uuid.uuid4()
@@ -201,39 +204,56 @@ async def run_fit_analysis(
             )
 
         overall_score = compute_overall_score(scored_items)
+
+        # Persisting is inside this same try: a failure here (an
+        # IntegrityError, a dropped connection, a serialization failure) is
+        # just as capable of stranding the row at 'pending' forever as a
+        # failure in the network work above, and must be settled to
+        # 'failed' the same way.
+        async with session_factory() as write_session:
+            resolved_id = await _persist(
+                write_session,
+                analysis_id=analysis_id,
+                resume_doc_id=resume_doc_id,
+                job_doc_id=job_doc_id,
+                model=model_name,
+                overall_score=overall_score,
+                match_specs=match_specs,
+            )
+            result = await write_session.execute(
+                select(FitAnalysis)
+                .options(selectinload(FitAnalysis.matches).selectinload(RequirementMatch.evidence))
+                .where(FitAnalysis.id == resolved_id)
+            )
+            return result.scalar_one()
     except Exception:
         logger.exception(
             "fit_analysis_failed",
             resume_doc_id=str(resume_doc_id),
             job_doc_id=str(job_doc_id),
         )
-        async with session_factory() as fail_session:
-            await _upsert_status(
-                fail_session,
-                analysis_id=analysis_id,
-                resume_doc_id=resume_doc_id,
-                job_doc_id=job_doc_id,
-                status="failed",
-                model=model_name,
+        try:
+            async with session_factory() as fail_session:
+                await _upsert_status(
+                    fail_session,
+                    analysis_id=analysis_id,
+                    resume_doc_id=resume_doc_id,
+                    job_doc_id=job_doc_id,
+                    status="failed",
+                    model=model_name,
+                )
+        except Exception:
+            # The settle call can itself fail (e.g. the DB is unreachable --
+            # plausibly the very reason the original call failed above).
+            # Logging and swallowing it here, then re-raising bare below,
+            # keeps the *original* exception as what the caller sees --
+            # the settle failure is a secondary concern, not the story.
+            logger.exception(
+                "fit_analysis_settle_failed",
+                resume_doc_id=str(resume_doc_id),
+                job_doc_id=str(job_doc_id),
             )
         raise
-
-    async with session_factory() as write_session:
-        resolved_id = await _persist(
-            write_session,
-            analysis_id=analysis_id,
-            resume_doc_id=resume_doc_id,
-            job_doc_id=job_doc_id,
-            model=model_name,
-            overall_score=overall_score,
-            match_specs=match_specs,
-        )
-        result = await write_session.execute(
-            select(FitAnalysis)
-            .options(selectinload(FitAnalysis.matches).selectinload(RequirementMatch.evidence))
-            .where(FitAnalysis.id == resolved_id)
-        )
-        return result.scalar_one()
 
 
 async def _score_all_batches(
@@ -301,7 +321,12 @@ async def _upsert_status(
         )
         .on_conflict_do_update(
             index_elements=["resume_doc_id", "job_doc_id"],
-            set_={"status": status},
+            # A job that previously went "ready" with a real score, and is
+            # later retried and fails again, must not keep reporting that
+            # stale score alongside status="failed" -- GET /analyses would
+            # otherwise show e.g. status: "failed", overall_score: 0.72 for a
+            # score that no longer corresponds to any stored verdicts.
+            set_={"status": status, "overall_score": None},
         )
     )
     await session.execute(stmt)

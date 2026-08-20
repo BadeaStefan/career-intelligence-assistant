@@ -259,6 +259,88 @@ async def test_failure_marks_analysis_failed_not_pending(
     assert reloaded.status == "failed"
 
 
+async def test_persist_failure_marks_analysis_failed_not_pending(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every LLM call can succeed and the row can still be stranded at
+    'pending' forever if the write/persist step afterward fails (an
+    IntegrityError, a dropped connection, a serialization failure) -- that
+    step must be covered by the same failure-handling as the network work
+    that precedes it, exactly like ``test_failure_marks_analysis_failed_not_pending``
+    covers the LLM-call failure window."""
+    resume = await _seed_ready_resume(session)
+    job = await _seed_job_with_requirements(session, count=2)
+    analysis = await _seed_analysis(
+        session, resume_doc_id=resume.id, job_doc_id=job.id, status="pending"
+    )
+    fake_llm = FakeLLM(structured_responses=[_batch_response(["r1", "r2"])])
+
+    async def _exploding_persist(*args: Any, **kwargs: Any) -> UUID:
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr("career_intel.analysis.engine._persist", _exploding_persist)
+
+    with pytest.raises(RuntimeError, match="write failed"):
+        await run_fit_analysis(
+            session, resume_doc_id=resume.id, job_doc_id=job.id, llm=fake_llm
+        )
+
+    reloaded = await _reload(analysis)
+    assert reloaded.status == "failed"
+
+
+async def test_retried_failure_clears_stale_overall_score(session_factory: Any) -> None:
+    """A job that went 'ready' with a real score, and is later retried and
+    fails again, must not keep reporting that stale score alongside
+    status='failed' -- GET /analyses would otherwise show e.g.
+    ``status: "failed", overall_score: 0.72`` for a score that no longer
+    corresponds to any stored verdicts."""
+    async with session_factory() as seed_session:
+        resume = await _seed_ready_resume(seed_session)
+        job = await _seed_job_with_requirements(seed_session, count=2)
+
+    fake_llm = FakeLLM(structured_responses=[_batch_response(["r1", "r2"])])
+    async with session_factory() as first_session:
+        first = await run_fit_analysis(
+            first_session, resume_doc_id=resume.id, job_doc_id=job.id, llm=fake_llm
+        )
+    assert first.overall_score is not None
+
+    async with session_factory() as retry_session:
+        with pytest.raises(RuntimeError):
+            await run_fit_analysis(
+                retry_session,
+                resume_doc_id=resume.id,
+                job_doc_id=job.id,
+                llm=_ExplodingLLM(),
+            )
+
+    reloaded = await _reload(first)
+    assert reloaded.status == "failed"
+    assert reloaded.overall_score is None
+
+
+async def test_settle_call_failure_does_not_mask_original_exception(
+    session: AsyncSession, exploding_llm: LLMClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If ``_upsert_status`` itself raises while handling the original
+    failure (e.g. the DB is unreachable -- plausibly the very reason the
+    original call failed), the ORIGINAL exception must still propagate, not
+    the settle call's own exception swallowing it."""
+    resume = await _seed_ready_resume(session)
+    job = await _seed_job_with_requirements(session, count=2)
+
+    async def _exploding_upsert(*args: Any, **kwargs: Any) -> None:
+        raise ValueError("settle also failed")
+
+    monkeypatch.setattr("career_intel.analysis.engine._upsert_status", _exploding_upsert)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await run_fit_analysis(
+            session, resume_doc_id=resume.id, job_doc_id=job.id, llm=exploding_llm
+        )
+
+
 async def test_concurrent_scheduling_claims_each_pair_once(session_factory: Any) -> None:
     """A resume and a job can finish enrichment at nearly the same moment;
     each background task sees the pair as newly complete. ON CONFLICT

@@ -207,8 +207,12 @@ async def _trigger_fit_analyses(
                 )
         except Exception:
             # run_fit_analysis has already settled its own row at
-            # status='failed'; this only stops one bad pair from blocking
-            # the rest of the newly-claimed batch.
+            # status='failed' -- including when the failure happened during
+            # its own persist step, not just during the LLM calls before it
+            # (see engine.py's module docstring) -- and, separately, already
+            # logged if even that settle attempt itself failed. This handler
+            # only stops one bad pair from blocking the rest of the
+            # newly-claimed batch.
             logger.exception(
                 "fit_analysis_failed",
                 resume_doc_id=str(resume_doc_id),
