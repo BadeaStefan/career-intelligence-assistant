@@ -687,6 +687,16 @@ async def test_extraction_failure_degrades_to_chunks(session, failing_llm, fake_
 
 **This phase produces the submittable application.** If time runs out afterwards, Phases 4–5 become README "what I'd add next" entries and the submission is still coherent.
 
+**Frontend sequencing note (added 20 Aug 2026).** The approved design handoff in
+`docs/design_handoff_career_intelligence/` is the presentation contract. Task 15 and the
+presentation-component portion of Tasks 16, 19, 20, and 22 may be completed immediately after
+Phase 2, before their backend routes exist. Components receive typed view models matching the
+planned API contracts, so later integration replaces data adapters rather than redesigning the UI.
+The normal application runtime must never fall back to handoff/sample analysis: it uses the real
+documents API today and renders an explicit unavailable state for capabilities whose endpoints do
+not exist yet. Handoff sample content is allowed only in tests, where it exercises populated states
+without being presented as a real analysis.
+
 ---
 
 ### Task 11: Evidence and chunk retrieval
@@ -970,9 +980,9 @@ def test_retry_on_ready_analysis_returns_409(client, ready_analysis):
 
 Design is an explicit evaluation criterion, not leftover polish. Do this *before* writing dashboard components so the React code implements a target rather than accreting one.
 
-- [ ] **Step 1: Invoke the `frontend-design` skill** for aesthetic direction — typography, palette, density.
-- [ ] **Step 2: Mock the dashboard and all four of its states** — populated, empty (no documents), analysing (pending), extraction-failed. The states are where uncomfortable design problems surface.
-- [ ] **Step 3: Timebox to one session.** Pick a direction and stop.
+- [x] **Step 1: Invoke the `frontend-design` skill** for aesthetic direction — typography, palette, density.
+- [x] **Step 2: Adopt and validate the supplied design handoff** — recreate populated, empty (no documents), analysing (pending), and extraction-failed states from `docs/design_handoff_career_intelligence/`. The handoff is a visual reference, not production code. Record any deliberate responsive adaptations; desktop fidelity remains the priority.
+- [x] **Step 3: Timebox to one session.** Pick a direction and stop.
 - [ ] **Step 4: Commit the design notes** to `docs/design-notes.md` — `docs: record visual direction for the dashboard`
 
 ---
@@ -982,12 +992,14 @@ Design is an explicit evaluation criterion, not leftover polish. Do this *before
 **Files:** Create `web/src/components/{JobRail,AnalysisPane,RequirementRow}.tsx`, `web/src/hooks/useAnalysis.ts`, `web/src/components/__tests__/{JobRail,AnalysisPane}.test.tsx`
 - Modify: `web/src/App.tsx` (three-region layout)
 
-- [ ] **Step 1: Write the failing tests** — the rail renders each job with its score and marks the selected one; a `pending` analysis shows "analysing…" not an empty pane; a `failed` one shows a retry button; a requirement with located evidence renders its quote, and one without renders the verdict *without* a broken citation link; a job whose `extraction_status` is `failed` shows "no fit analysis — still answerable in chat" instead of an analysis pane (spec §3's degradation path, scheduled around in Task 13).
-- [ ] **Step 2: Run and watch fail**
-- [ ] **Step 3: Implement** to the Task 15 design. Poll analyses while any is `pending`.
-- [ ] **Step 4: Run and watch pass**
-- [ ] **Step 5: Verify in the browser** — `docker compose up`, upload a sample resume and three job posts (the golden fixtures do not exist until Task 21), confirm scores and citations render and that clicking a citation highlights the right span.
-- [ ] **Step 6: Commit** — `feat(web): add job rail and requirement-level analysis pane`
+- [x] **Step 1: Define typed dashboard view models and write failing tests** — the rail renders each job with its score and marks the selected one; a `pending` analysis shows "analysing…" not an empty pane; a `failed` one shows a retry button; a requirement with located evidence renders its quote, and one without renders the verdict *without* a broken citation link; a job whose `extraction_status` is `failed` shows "no fit analysis — still answerable in chat" instead of an analysis pane (spec §3's degradation path, scheduled around in Task 13). Test data may reproduce the handoff content, but production modules must not import it.
+- [x] **Step 2: Run and watch fail**
+- [x] **Step 3: Implement presentation components** to the Task 15 handoff. Keep them data-source agnostic: props contain the typed view models and callbacks; components do not fetch and do not import fixtures.
+- [x] **Step 4: Integrate the currently available documents API** — empty/upload, extraction-pending, and extraction-failed states use `useDocuments()`. Until Task 14 exists, an enriched job renders an explicit “Fit analysis will appear when the analysis service is available” state; it must not render sample verdicts.
+- [x] **Step 5: Run and watch pass**
+- [ ] **Step 6: Verify the current runtime in the browser** — confirm empty/upload and real document processing states. Separately render populated presentation components in tests and confirm interactions there; do not add a fixture-powered runtime switch.
+- [ ] **Step 7: After Task 14, add `useAnalysis`** — replace the unavailable adapter with TanStack Query calls to `GET /analyses` and `GET /analyses/{job_doc_id}`, poll only while pending, and prove with a component test that the presentation tree is unchanged.
+- [ ] **Step 8: Commit** — `feat(web): add career intelligence workspace and requirement analysis views`
 
 **🚩 PHASE 3 CHECKPOINT — SUBMITTABLE.** Take screenshots now, before adding anything else.
 
@@ -1122,7 +1134,8 @@ it("disables the input while a response is in flight", async () => { /* pending 
 ```
 
 - [ ] **Step 2: Run and watch fail**
-- [ ] **Step 3: Implement** — the toggle is local UI state included in every `POST .../messages` body; history renders each message under the scope stored on its row.
+- [ ] **Step 3: Implement the presentation shell** — the toggle is local UI state and the dock accepts typed messages plus send/scope callbacks. Before Task 18 exists, the runtime composer is disabled with a precise availability note; no handoff conversation is rendered in production.
+- [ ] **Step 3a: After Task 18, implement `useChat`** — include the toggle's current scope in every `POST .../messages` body; history renders each message under the scope stored on its row. Replace the disabled adapter without changing `ChatDock` markup.
 - [ ] **Step 4: Run and watch pass**
 - [ ] **Step 5: Commit** — `feat(web): add docked chat with explicit scope toggle`
 
@@ -1200,7 +1213,8 @@ def test_get_before_generation_returns_404(client, ready_analysis):
 - [ ] **Step 2: Run and watch fail**
 - [ ] **Step 3: Implement.** Input is the cached fit analysis only — no new retrieval. All network before the transaction; validate handles with `validate_handles` (Task 12) before persisting.
 - [ ] **Step 4: Run and watch pass**
-- [ ] **Step 5: Frontend** — `PrepPane` triggers the POST on first open (button or effect), renders cached prep from the GET thereafter; test that a second open issues no POST.
+- [x] **Step 5: Frontend presentation shell** — `PrepPane` accepts typed questions matching `PrepQuestionOut`. Before the prep routes exist, the runtime tab explains that interview preparation becomes available after fit analysis; handoff questions appear only in tests.
+- [ ] **Step 5a: After the backend route lands, integrate it** — trigger the POST on first open (button or effect), render cached prep from the GET thereafter, and test that a second open issues no POST. The integration must not change presentation markup.
 - [ ] **Step 6: Commit** — `feat(prep): derive interview questions from the fit analysis`
 
 ---
@@ -1266,7 +1280,8 @@ it("renders tokens, latency, cost, and retrieval scores for the interaction", as
 ```
 
 - [ ] **Step 2: Run and watch fail**
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement the presentation shell first** — `TraceDrawer` accepts the typed trace payload and open/close state. Before the trace route exists, the runtime drawer shows that trace details are unavailable; handoff telemetry values remain test-only.
+- [ ] **Step 3a: After the backend route lands, integrate it** — fetch by the response request id and pass the real payload into the existing presentation component.
 - [ ] **Step 4: Run and watch pass**
 - [ ] **Step 5: Commit** — `feat: surface llm call and retrieval traces in the UI`
 
