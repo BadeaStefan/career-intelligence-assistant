@@ -80,6 +80,29 @@ One pipeline, three outputs. A single ingest function parses the file once, then
 writes three kinds of record inside one transaction. Nothing is duplicated;
 deletion cascades from one foreign key.
 
+All network work (extraction calls, embedding batches) completes *before* the
+transaction opens; the transaction wraps only the writes. A Postgres transaction
+is never held open across an OpenAI call.
+
+### Execution model
+
+Ingest runs in a FastAPI `BackgroundTask`: the upload endpoint writes the
+`documents` row with `status = 'pending'` and returns immediately; the frontend
+polls the document until `ready` or `failed`. When a document reaches `ready`,
+the same background task triggers fit analysis for every `(resume, job)` pair
+that now exists (§5). A full queue (SQS + worker, §14) is deliberately not built
+locally — `BackgroundTasks` gives the same non-blocking UX with none of the
+infrastructure, and the seam where a queue slots in is exactly this one
+function.
+
+**Crash recovery.** Background tasks run inside the API process, so a container
+restart mid-ingest would otherwise strand a row at `pending` forever while the
+frontend polls it forever. On startup, any `documents` or `fit_analyses` row
+still `pending` after more than `STALE_PENDING_MINUTES` is marked `failed` with
+a retry available. This turns an invisible hang into a visible, recoverable
+error — the honest limitation of the in-process shortcut, handled rather than
+hidden.
+
 ```
 file upload (PDF/DOCX/TXT)  ─┐
                              ├─►  parse to plain text  ─►  documents row
@@ -109,8 +132,8 @@ retrieval is nonetheless kept, for three reasons:
    does not.
 3. It is ~30 lines of code. If it sprawls, cut it.
 
-Chunking is deliberately *not* the primary retrieval mechanism, and the README
-should say so explicitly.
+Chunking is deliberately *not* the primary retrieval mechanism; the README
+states this explicitly.
 
 ### Extraction contract
 
@@ -122,6 +145,24 @@ separate: `status` means "is this document usable at all", `extraction_status`
 means "did we get structured records out of it". A job whose extraction failed
 is still answerable in chat but cannot produce a fit analysis, and the UI says
 so.
+
+### Span location: the model quotes, Python locates
+
+LLMs cannot produce reliable character offsets — asked for `char_start`, a model
+returns plausible-looking numbers that are off by tens or hundreds of
+characters, which would quietly corrupt every citation in the UI. So the
+extraction schema asks for the **exact verbatim quote** instead, and Python
+computes the offsets by locating that quote in `raw_text`:
+
+1. Exact substring match.
+2. Fallback: whitespace-normalised match (extraction sometimes collapses line
+   breaks), offsets mapped back to the original text.
+3. If neither matches, the unit is kept for retrieval but stored with null
+   offsets — it can still support a verdict, it just cannot be highlighted.
+   Never guessed.
+
+The eval fixture (§9) asserts a minimum location rate so a prompt change that
+degrades quoting fidelity is caught, not shipped.
 
 ---
 
@@ -142,15 +183,17 @@ documents            id, kind(resume|job), title, company, filename,
 
   ├─ evidence_units  (resume only)
   │                  document_id, kind(skill|achievement|role), text,
-  │                  char_start, char_end, embedding vector(1536)
+  │                  char_start, char_end (nullable, see §3 span location),
+  │                  embedding vector(1536)
 
   └─ requirements    (job only)
                      document_id, ordinal, text,
                      importance(required|preferred), category,
                      embedding vector(1536)
 
-fit_analyses         resume_doc_id, job_doc_id, overall_score, summary,
-                     model, created_at    UNIQUE(resume_doc_id, job_doc_id)
+fit_analyses         resume_doc_id, job_doc_id, status(pending|ready|failed),
+                     overall_score, summary, model, created_at
+                     UNIQUE(resume_doc_id, job_doc_id)
 
   └─ requirement_matches
                      fit_analysis_id, requirement_id,
@@ -171,10 +214,31 @@ retrieval_traces     request_id, query, results jsonb (ids + scores)
 ```
 
 `char_start` / `char_end` are what make citations real: every claim in the UI
-points at an exact span of the actual resume text, not a paraphrase.
+points at an exact span of the actual resume text, not a paraphrase. They are
+computed by Python from verbatim quotes (§3), never taken from the model.
 
-SQLAlchemy 2.0 for models, Alembic for migrations. HNSW indexes on each
-`embedding` column.
+Chat citations live in a `jsonb` column while fit citations get a join table —
+a deliberate asymmetry. `match_evidence` is queried relationally (the dashboard
+joins verdicts to evidence spans); a chat message's citations are only ever read
+back with that one message.
+
+SQLAlchemy 2.0 for models, Alembic for migrations.
+
+HNSW indexes on each `embedding` column, with an honest caveat: at this corpus
+size they buy nothing. A sequential scan is fine under roughly 10k rows, and
+because HNSW is an *approximate* index it trades recall for speed — so at this
+scale it is fractionally worse for correctness than no index at all. They are
+present so the schema is the one that scales, and the README says exactly that
+rather than claiming a performance win.
+
+The `1536` dimension is a single named constant in code, imported by both the
+models and the migration. It is deliberately **not** read from the
+embedding-model setting at migration time: a migration must produce the same
+schema on every run, and one that reads live config would generate a 3072-dim
+column the day someone switches to `text-embedding-3-large`, silently diverging
+two databases built from identical history. Changing dimensions requires a new
+migration — which is correct, because it is a genuine schema change that also
+requires re-embedding every row.
 
 ### Requirement-to-job linkage
 
@@ -192,6 +256,16 @@ belongs to, so it cannot get it wrong. Fit analysis is scoped to one
 
 Runs once per `(resume, job)` pair and is **persisted**. The dashboard must
 render instantly; it cannot be issuing LLM calls while the user waits.
+
+### Lifecycle
+
+Analysis is triggered automatically by ingest (§3): when a document becomes
+`ready`, a `fit_analyses` row is inserted with `status = 'pending'` for each
+newly-completed pair, then computed in the same background task. The dashboard
+reads that status — a card is "analysing…" until `ready`, and a `failed`
+analysis shows a retry button rather than a blank. Uploading a new resume
+replaces the old one: the old `documents` row is deleted, analyses cascade away
+with it, and every pair is recomputed against the new resume.
 
 ```
 for each requirement:  kNN vs. this resume's evidence_units → top 5 + scores
@@ -258,8 +332,8 @@ Within a scope, job selection filters retrieval via SQL
 
 A per-job **Prep** view, derived entirely from the cached fit analysis — the gaps
 are what the candidate will be pressed on; the strong matches are the stories to
-lead with. One extra LLM call over data phase 3 already computed: no new
-pipeline, no new retrieval.
+lead with. One extra LLM call over data the fit engine (§5) already computed: no
+new pipeline, no new retrieval.
 
 Produces 5–8 likely questions, each anchored to the requirement it probes:
 
@@ -307,7 +381,12 @@ A "how did I get this answer?" drawer exposes `llm_calls` and
 `retrieval_traces` for the current interaction.
 
 Stack: Vite + React + TypeScript, TanStack Query for server state, Tailwind.
-Visual design is a later pass; this spec fixes structure only.
+
+This spec fixes structure only. Visual design happens as a **timeboxed mockup
+pass (Claude Design) before frontend implementation** — the dashboard plus its
+loading / analysing / extraction-failed states — so the React code implements a
+target rather than accreting one. Design is an explicit evaluation criterion,
+not a leftover polish task.
 
 ---
 
@@ -364,6 +443,8 @@ identical. Local `api/.venv` exists for editor resolution and fast test runs;
 the container remains the source of truth for running the app.
 
 Config via `pydantic-settings`, `.env.example` committed, `.env` ignored.
+`STALE_PENDING_MINUTES` (§3 crash recovery) lives here. The embedding dimension
+does **not** — it is a code constant, for the reason given in §4.
 
 ---
 
