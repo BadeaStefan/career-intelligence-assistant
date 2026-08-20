@@ -23,7 +23,9 @@ records at ingest time and evaluate every one of them.
 - Upload a resume and multiple job postings (file or pasted text).
 - A persisted, per-job fit analysis: requirement-by-requirement verdicts with
   citations pointing at exact spans of the resume.
-- Grounded conversational Q&A, scoped to a selected job.
+- Grounded conversational Q&A, scoped to a selected job by default, with an
+  explicit toggle to widen to all jobs for comparison questions.
+- Per-job interview preparation derived from the fit analysis.
 - Observable: token counts, latency, cost, and retrieval scores visible in the UI.
 - Containerised, tested, reproducible.
 
@@ -33,9 +35,10 @@ records at ingest time and evaluate every one of them.
 - Fetching job postings from a URL. Job boards block server-side fetching and
   the ones that don't need JS rendering; it is a scraping project in disguise.
 - Resume rewriting / generation.
-- A cross-job comparison matrix. Attractive, but requires clustering
+- A cross-job comparison *matrix view*. Attractive, but requires clustering
   differently-worded requirements into shared rows — the piece most likely to
-  visibly misfire in a demo. Candidate for later.
+  visibly misfire in a demo. Cross-job *questions* are supported in chat via the
+  "all jobs" scope (§6), which covers most of the value without that risk.
 
 ---
 
@@ -154,8 +157,13 @@ fit_analyses         resume_doc_id, job_doc_id, overall_score, summary,
                      verdict(strong|partial|missing), score, rationale
       └─ match_evidence    requirement_match_id, evidence_unit_id
 
-chat_sessions        id, job_doc_id (nullable), created_at
+chat_sessions        id, job_doc_id (nullable), scope(job|all), created_at
   └─ chat_messages   session_id, role, content, citations jsonb, created_at
+
+interview_preps      fit_analysis_id, model, created_at
+                                      UNIQUE(fit_analysis_id)
+  └─ prep_questions  interview_prep_id, requirement_id, question,
+                     why_they_will_ask, how_to_frame, evidence_ids[]
 
 llm_calls            purpose, model, prompt_tokens, completion_tokens,
                      latency_ms, cost_usd, request_id, created_at
@@ -221,12 +229,50 @@ a specific verdict.
 
 ## 6. Chat
 
-Cheaper, separate path. Context = the selected job's spec + its cached fit
-analysis + top-k resume chunks + recent turns. Answers carry citations, validated
-the same way as the fit engine's.
+Cheaper, separate path. Answers carry citations, validated the same way as the
+fit engine's.
 
-Job selection scopes retrieval via SQL (`WHERE document_id = :job_id`), not via a
-prompt instruction.
+Chat has two scopes, chosen by an **explicit toggle in the chat header**:
+
+```
+"this job"  (default)  → job spec + its cached analysis + top-k resume chunks
+"all jobs"             → every job's summary + every cached fit analysis
+                         + top-k resume chunks
+```
+
+Cross-job comparison needs no special retrieval machinery. A cached analysis is
+an overall score plus ~15 short requirement verdicts; three jobs is 1–2k tokens
+total, so the model compares from structured data it can see *completely* rather
+than from a sampled top-k. This delivers most of the value of the deferred
+comparison matrix without the requirement-clustering risk.
+
+Scope is a UI toggle rather than an LLM intent classifier: deterministic, no
+added latency, cannot misroute.
+
+> **Anything that can be UI state must never be a prompt inference.**
+
+Within a scope, job selection filters retrieval via SQL
+(`WHERE document_id = :job_id`), not via a prompt instruction.
+
+## 6b. Interview preparation
+
+A per-job **Prep** view, derived entirely from the cached fit analysis — the gaps
+are what the candidate will be pressed on; the strong matches are the stories to
+lead with. One extra LLM call over data phase 3 already computed: no new
+pipeline, no new retrieval.
+
+Produces 5–8 likely questions, each anchored to the requirement it probes:
+
+```
+question, probes_requirement_id, verdict,
+why_they_will_ask, how_to_frame, evidence_ids[]
+```
+
+`evidence_ids` pass the same validation as §5, so "lead with…" advice cites real
+resume spans rather than invented achievements.
+
+Generated on demand and cached in `interview_preps`, not precomputed at ingest —
+most users will not open it for every job and it is not free.
 
 ---
 
@@ -238,15 +284,19 @@ Layout: **analysis-first with a docked chat**.
 ┌────────────────────────────────────────────────────────────┐
 │ Career Intelligence · resume.pdf                           │
 ├──────────┬──────────────────────────────┬──────────────────┤
-│ Jobs     │ Senior Backend · Datadog 72% │ Ask about this   │
-│ ▸ #2 72% │  Strong match · 8            │ job              │
-│   #1 84% │   Python, 5+ yrs             │                  │
-│   #3 55% │    "Built ingestion…" l.9    │  [chat turns]    │
-│ + Add    │  Gaps · 4                    │                  │
-│          │   Kubernetes      missing    │  [ask…]          │
+│ Jobs     │ Senior Backend · Datadog 72% │ ( this job │ all)│
+│ ▸ #2 72% │ ┌ Analysis ┬ Prep ┐          │                  │
+│   #1 84% │  Strong match · 8            │  [chat turns]    │
+│   #3 55% │   Python, 5+ yrs             │                  │
+│ + Add    │    "Built ingestion…" l.9    │                  │
+│          │  Gaps · 4                    │  [ask…]          │
+│          │   Kubernetes      missing    │                  │
 │          │   Go              partial    │                  │
 └──────────┴──────────────────────────────┴──────────────────┘
 ```
+
+The centre pane has two tabs: **Analysis** (§5) and **Prep** (§6b). The chat
+header carries the scope toggle from §6.
 
 Scored fit cards are present the moment upload finishes — no empty chat box
 demanding the user already know what to ask. Clicking a job opens its
