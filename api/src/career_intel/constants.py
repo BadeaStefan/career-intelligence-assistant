@@ -18,3 +18,15 @@ it is a genuine schema change that also invalidates every stored vector.
 
 See spec section 4.
 """
+
+MODEL_PRICE_PER_MILLION_TOKENS: dict[str, dict[str, float]] = {
+    "gpt-4o-mini": {"prompt": 0.15, "completion": 0.60},
+    "text-embedding-3-small": {"prompt": 0.02, "completion": 0.0},
+}
+"""USD per 1M tokens, published OpenAI pricing at time of writing.
+
+A per-model table rather than a single rate: embeddings have no completion
+tokens, and the two models differ by 7x on the prompt side. Read by
+``llm/openai_client.py`` to compute ``llm_calls.cost_usd`` -- never by
+migrations, so a price change never touches the schema.
+"""
