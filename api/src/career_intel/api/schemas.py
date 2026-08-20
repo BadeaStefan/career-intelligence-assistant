@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from career_intel.models import DocumentKind
+from career_intel.models import DocumentKind, FitAnalysisStatus, RequirementVerdictValue
 
 
 class PasteRequest(BaseModel):
@@ -33,3 +33,46 @@ class DocumentSummary(BaseModel):
     status: Literal["pending", "ready", "failed"]
     extraction_status: Literal["pending", "ready", "failed"]
     created_at: datetime
+
+
+class AnalysisSummary(BaseModel):
+    """One row of the job rail (``GET /analyses``)."""
+
+    job_doc_id: uuid.UUID
+    title: str | None
+    company: str | None
+    status: FitAnalysisStatus
+    overall_score: float | None
+
+
+class EvidenceSummary(BaseModel):
+    """A citation backing one requirement match.
+
+    ``char_start``/``char_end`` are null when the extracted quote could not
+    be located in the resume's raw text (non-negotiable #6) -- still valid
+    evidence, just not highlightable.
+    """
+
+    text: str
+    char_start: int | None
+    char_end: int | None
+
+
+class RequirementMatchSummary(BaseModel):
+    verdict: RequirementVerdictValue
+    rationale: str
+    evidence: list[EvidenceSummary]
+
+
+class AnalysisDetail(BaseModel):
+    """The full breakdown for ``GET /analyses/{job_doc_id}``.
+
+    ``matches`` is ordered strong, then partial, then missing -- not split
+    into three separate keys, since every match already carries its own
+    ``verdict``.
+    """
+
+    job_doc_id: uuid.UUID
+    status: FitAnalysisStatus
+    overall_score: float | None
+    matches: list[RequirementMatchSummary]
