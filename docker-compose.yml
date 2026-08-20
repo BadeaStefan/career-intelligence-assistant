@@ -22,5 +22,41 @@ services:
       timeout: 3s
       retries: 15
 
+  api:
+    build:
+      context: ./api
+    environment:
+      # Reached over the compose network, so the loopback port mapping on db
+      # is irrelevant here.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-career_intel}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        # Waiting for healthy, not merely started: the container runs
+        # `alembic upgrade head` on boot and would exit if Postgres were still
+        # initialising.
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./web
+    environment:
+      # Consumed by the Vite proxy so the browser only ever talks to one
+      # origin, which sidesteps CORS entirely.
+      API_URL: http://api:8000
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      - api
+    volumes:
+      # Source is mounted for hot reload; the anonymous volume keeps the
+      # image's node_modules rather than letting the host directory shadow it.
+      - ./web/src:/app/src
+      - /app/node_modules
+
 volumes:
   db_data:

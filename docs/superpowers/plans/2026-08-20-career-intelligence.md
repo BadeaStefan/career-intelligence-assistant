@@ -21,6 +21,7 @@ The deadline is not generous. The plan is therefore **phased so that a coherent,
 - **Python 3.12**, dependencies via `uv`, `uv.lock` committed. Dockerfile installs from the same lockfile.
 - **`EMBEDDING_DIM = 1536`** — a code constant in `api/src/career_intel/constants.py`, imported by both models and migrations. Never read from settings at migration time (spec §4).
 - **No network in unit tests.** The OpenAI client sits behind a Protocol; tests inject fakes. Live tests carry `@pytest.mark.live` and are deselected by default via `addopts = "-m 'not live'"`.
+- **Unit tests run against a real Postgres** (pgvector has no SQLite equivalent): run `docker compose up -d db` first. The compose `db` service publishes `127.0.0.1:5432` and provisions a separate `career_intel_test` database via `infra/init-test-db.sql`; conftest applies the real migrations. "No network" means no OpenAI, not no database.
 - **Route handlers stay thin** — no business logic, no LLM calls, no query construction in `routes/`.
 - **All network work completes before a DB transaction opens.** Never hold a Postgres transaction across an OpenAI call (spec §3).
 - **Every LLM call records an `llm_calls` row** (purpose, model, tokens, latency, cost). Non-negotiable — it is the observability story.
@@ -53,7 +54,7 @@ api/
 │   │   ├── retrieval.py validation.py scoring.py schemas.py engine.py
 │   ├── chat/         context.py service.py
 │   ├── prep/         schemas.py service.py
-│   └── api/          app.py deps.py routes/{documents,analyses,chat,prep,traces}.py
+│   └── api/          app.py deps.py schemas.py routes/{documents,analyses,chat,prep,traces}.py
 └── tests/  conftest.py · unit/ · eval/ · fixtures/golden/
 
 web/
@@ -88,7 +89,7 @@ Deliberately LLM-free. Getting three containers, migrations, and file upload wor
 **Interfaces:**
 - Produces: `create_app() -> FastAPI`; `Settings` with `database_url: str`, `openai_api_key: str = ""`, `llm_model: str = "gpt-4o-mini"`, `embedding_model: str = "text-embedding-3-small"`, `max_upload_bytes: int = 5_242_880`; `get_settings() -> Settings` (`@lru_cache`); `EMBEDDING_DIM: int = 1536`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # api/tests/unit/test_health.py
@@ -102,12 +103,12 @@ def test_health_returns_ok():
     assert response.json() == {"status": "ok"}
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd api && uv run pytest tests/unit/test_health.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'career_intel'`
 
-- [ ] **Step 3: Create the package and minimal app**
+- [x] **Step 3: Create the package and minimal app**
 
 `pyproject.toml` declares `fastapi`, `uvicorn[standard]`, `pydantic-settings`, `sqlalchemy[asyncio]`, `asyncpg`, `alembic`, `pgvector`, `structlog`, `openai`, `tiktoken`, `pypdf`, `python-docx`, `python-multipart`; dev group `pytest`, `pytest-asyncio`, `httpx`, `ruff`, `mypy`. Set `[tool.pytest.ini_options] addopts = "-m 'not live'"` and register the `live` marker.
 
@@ -135,15 +136,15 @@ def create_app() -> FastAPI:
     return app
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 Run: `cd api && uv run pytest tests/unit/test_health.py -v` → PASS
 
-- [ ] **Step 5: Write CLAUDE.md**
+- [x] **Step 5: Write CLAUDE.md**
 
 Encode the conventions this project is actually graded on, so they are enforceable rather than aspirational: TDD (failing test first, always); route handlers contain no business logic; every LLM call goes through the `LLMClient` Protocol and records an `llm_calls` row; no network in unit tests; raw document text never logged; `EMBEDDING_DIM` is a constant, not a setting. Include the commands to run tests, lint, and bring the stack up.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add api CLAUDE.md .env.example && git commit -m "feat(api): scaffold FastAPI service with health check"
@@ -161,7 +162,7 @@ git add api CLAUDE.md .env.example && git commit -m "feat(api): scaffold FastAPI
 - Consumes: `EMBEDDING_DIM`, `Settings` (Task 1)
 - Produces: `Base`; `Document` with `id: UUID`, `kind: Literal["resume","job"]`, `title: str | None`, `company: str | None`, `filename: str | None`, `source: Literal["upload","paste"]`, `raw_text: str`, `status`, `extraction_status`, `created_at`; `session_factory`; `get_session()` async dependency
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # api/tests/unit/test_models_document.py
@@ -178,22 +179,22 @@ async def test_document_defaults_to_pending(session):
     assert doc.id is not None
 ```
 
-`conftest.py` provides a `session` fixture bound to a real Postgres (the compose `db` service, or a `DATABASE_URL` env var), creating and rolling back a transaction per test. Use a real database, not SQLite — pgvector types do not exist in SQLite, and a fake here would hide exactly the bugs this suite must catch.
+`conftest.py` provides a `session` fixture bound to a real Postgres (the compose `db` service; `TEST_DATABASE_URL` overrides). Use a real database, not SQLite — pgvector types do not exist in SQLite, and a fake here would hide exactly the bugs this suite must catch. *As built,* isolation is by **truncation, not per-test rollback**: background enrichment commits in its own session, which no other transaction's rollback can undo. Schema comes from applying the real migrations, so model/migration drift breaks the suite instead of a deploy.
 
-- [ ] **Step 2: Run it and watch it fail** — `ImportError: cannot import name 'Document'`
+- [x] **Step 2: Run it and watch it fail** — `ImportError: cannot import name 'Document'`
 
-- [ ] **Step 3: Implement `Base`, `Document`, session plumbing, and migration `0001`**
+- [x] **Step 3: Implement `Base`, `Document`, session plumbing, and migration `0001`**
 
 `status` and `extraction_status` are separate columns with separate meanings (spec §3): `status` = "is this document usable at all", `extraction_status` = "did we get structured records out of it". Both default to `'pending'`. The migration must `CREATE EXTENSION IF NOT EXISTS vector;` before any table using it.
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
-- [ ] **Step 5: Verify the migration round-trips**
+- [x] **Step 5: Verify the migration round-trips**
 
 Run: `uv run alembic upgrade head && uv run alembic downgrade base && uv run alembic upgrade head`
 Expected: no errors. A migration that cannot be downgraded is a migration you cannot trust.
 
-- [ ] **Step 6: Commit** — `feat(api): add documents table and migration harness`
+- [x] **Step 6: Commit** — `feat(api): add documents table and migration harness`
 
 ---
 
@@ -215,7 +216,7 @@ Expected: no errors. A migration that cannot be downgraded is a migration you ca
   def parse_document(data: bytes, filename: str, content_type: str) -> ParsedDocument
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # api/tests/unit/test_parsing.py
@@ -244,23 +245,29 @@ def test_scanned_pdf_raises_rather_than_returning_empty(scanned_pdf_bytes):
         parse_document(scanned_pdf_bytes, "scan.pdf", "application/pdf")
 ```
 
-- [ ] **Step 2: Run and watch fail**
-- [ ] **Step 3: Implement** — dispatch on content type: `pypdf` for PDF, `python-docx` for DOCX, decode for text. Raise `EmptyDocumentError` when extracted text is under ~50 non-whitespace characters.
-- [ ] **Step 4: Run and watch pass**
-- [ ] **Step 5: Commit** — `feat(ingest): parse pdf, docx, and plain text uploads`
+- [x] **Step 2: Run and watch fail**
+- [x] **Step 3: Implement** — dispatch on content type: `pypdf` for PDF, `python-docx` for DOCX, decode for text. Raise `EmptyDocumentError` when extracted text is under ~50 non-whitespace characters.
+- [x] **Step 4: Run and watch pass**
+- [x] **Step 5: Commit** — `feat(ingest): parse pdf, docx, and plain text uploads`
 
 ---
 
 ### Task 4: Upload endpoint, background pipeline, crash recovery
 
-**Files:**
-- Create: `api/src/career_intel/ingest/pipeline.py`, `api/src/career_intel/api/routes/documents.py`, `api/src/career_intel/api/deps.py`, `api/tests/unit/{test_documents_route.py,test_startup_sweep.py}`
-- Modify: `api/src/career_intel/api/app.py`
+> **As built (commit `02069aa`) — this note is authoritative; the steps below are kept as history.** Parsing moved *into the request handler*: it is fast, local, and its failures (scanned PDF, unsupported type) are things the user must fix, so they surface as `415`/`422` in the response instead of in a row discovered by polling. Documents are created with `status='ready'`; the background task settles only `extraction_status`, and the frontend polls that. Spec §3 was updated to match.
 
-**Interfaces:**
-- Produces: `POST /documents` (multipart file **or** JSON `{kind, text, title?}`) → `201 {id, status}`; `GET /documents` → list; `GET /documents/{id}`; `DELETE /documents/{id}`; `async def ingest_document(document_id: UUID) -> None`; `async def fail_orphaned_pending_rows(session) -> int`
+**Files (as built):**
+- Created: `api/src/career_intel/ingest/pipeline.py`, `api/src/career_intel/api/routes/documents.py`, `api/src/career_intel/api/schemas.py`, `api/tests/unit/{test_documents_route.py,test_startup_sweep.py}`
+- Modified: `api/src/career_intel/api/app.py`, `api/tests/conftest.py`, `docker-compose.yml` (db service, loopback-bound), `infra/init-test-db.sql`
 
-- [ ] **Step 1: Write the failing tests**
+**Interfaces (as built — later tasks consume these):**
+- `POST /documents/upload` — multipart `{kind, file}`; parses in-request on a threadpool; `415` unsupported type, `422` empty/scanned, `413` over `max_upload_bytes`; returns `201` with `status='ready'`, `extraction_status='pending'`
+- `POST /documents/paste` — JSON `{kind, text, title?, company?}`; `413` when the text exceeds `max_upload_bytes`
+- `GET /documents` → list · `GET /documents/{id}` · `DELETE /documents/{id}` → `204`
+- `async def enrich_document(document_id: UUID) -> None` — the background seam (chunk/extract/embed in Phase 2); opens its own session; any exception settles `extraction_status='failed'` before propagating
+- `async def fail_orphaned_pending_rows(session) -> int` — sweeps **both** `status` and `extraction_status`, no age check; called from the `lifespan` hook
+
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # api/tests/unit/test_startup_sweep.py
@@ -294,9 +301,9 @@ def test_rejects_oversize_upload(client):
     assert response.status_code == 413
 ```
 
-- [ ] **Step 2: Run and watch fail**
+- [x] **Step 2: Run and watch fail**
 
-- [ ] **Step 3: Implement route, pipeline, sweep**
+- [x] **Step 3: Implement route, pipeline, sweep**
 
 Route validates mime allowlist and size (spec §8), writes the `pending` row, schedules `ingest_document` via `BackgroundTasks`, returns `201`. In Phase 1 `ingest_document` only parses and sets `status='ready'` — no LLM yet.
 
@@ -314,42 +321,86 @@ async def ingest_document(document_id: UUID) -> None:
 
 Call `fail_orphaned_pending_rows` from a FastAPI `lifespan` startup hook.
 
-- [ ] **Step 4: Run and watch pass**
-- [ ] **Step 5: Commit** — `feat(api): upload documents with background ingest and crash recovery`
+- [x] **Step 4: Run and watch pass**
+- [x] **Step 5: Commit** — landed as `feat(api): upload documents with background enrichment and crash recovery`
 
 ---
 
-### Task 5: Compose, Dockerfiles, web scaffold, document list
+### Task 5: Compose services, Dockerfiles, web scaffold, document list
 
 **Files:**
-- Create: `docker-compose.yml`, `api/Dockerfile`, `web/{Dockerfile,package.json,vite.config.ts,index.html}`, `web/src/{main.tsx,App.tsx}`, `web/src/api/{client.ts,types.ts}`, `web/src/hooks/useDocuments.ts`, `web/src/components/UploadPanel.tsx`, `web/src/components/__tests__/UploadPanel.test.tsx`
+- Create: `api/Dockerfile`, `web/{Dockerfile,package.json,vite.config.ts,index.html}`, `web/src/{main.tsx,App.tsx}`, `web/src/api/{client.ts,types.ts}`, `web/src/hooks/useDocuments.ts`, `web/src/components/UploadPanel.tsx`, `web/src/components/__tests__/UploadPanel.test.tsx`
+- Modify: `docker-compose.yml` — the `db` service **already exists** (Task 4), loopback-bound with a security rationale comment; keep both. Add `api` and `web` services. Do not recreate the file.
 
 **Interfaces:**
-- Produces: `apiClient.uploadDocument(file: File, kind: DocumentKind): Promise<DocumentSummary>`; `apiClient.listDocuments(): Promise<DocumentSummary[]>`; `useDocuments()` polling every 2s while any document is `pending`
+- Consumes: the Task 4 as-built endpoints — `POST /documents/upload`, `POST /documents/paste`, `GET /documents`
+- Produces: `apiClient.uploadDocument(file: File, kind: DocumentKind): Promise<DocumentSummary>` → `POST /api/documents/upload`; `apiClient.pasteDocument(input: {kind: DocumentKind; text: string; title?: string; company?: string}): Promise<DocumentSummary>` → `POST /api/documents/paste`; `apiClient.listDocuments(): Promise<DocumentSummary[]>` → `GET /api/documents`; `useDocuments()` polling every 2s while any document has `extraction_status === "pending"`
+- `DocumentSummary` mirrors the API schema: `{id, kind, title, company, filename, source, status, extraction_status, created_at}`. **Two status fields:** `status` is settled at upload time (parsing happens in the request, so a listed document is always usable); enrichment progress is `extraction_status`, and *that* is what the UI renders as "processing".
 
 - [ ] **Step 1: Write the failing frontend test**
 
 ```tsx
 // web/src/components/__tests__/UploadPanel.test.tsx
-it("shows a pending document as processing", async () => {
-  render(<UploadPanel documents={[{ id: "1", kind: "resume", title: "cv.pdf", status: "pending" }]} />);
+it("shows a document with pending extraction as processing", async () => {
+  render(<UploadPanel documents={[{ id: "1", kind: "resume", title: "cv.pdf", status: "ready", extraction_status: "pending" }]} />);
   expect(screen.getByText(/processing/i)).toBeInTheDocument();
 });
 ```
 
 - [ ] **Step 2: Run and watch fail** — `vitest run`
 - [ ] **Step 3: Scaffold Vite + React + TS + Tailwind + TanStack Query, implement `UploadPanel`**
+
+The API's routes are unprefixed (`/documents/...`), so the client calls `/api/...` and the Vite dev proxy strips the prefix:
+
+```ts
+// vite.config.ts
+server: {
+  proxy: {
+    "/api": {
+      target: process.env.API_URL ?? "http://localhost:8000", // compose sets API_URL=http://api:8000
+      rewrite: (path) => path.replace(/^\/api/, ""),
+    },
+  },
+},
+```
+
 - [ ] **Step 4: Run and watch pass**
 
-- [ ] **Step 5: Write compose and Dockerfiles**
+- [ ] **Step 5: Extend compose and write the Dockerfiles**
 
-Three services: `db` (`pgvector/pgvector:pg16`, healthcheck, named volume), `api` (depends on `db` healthy, runs `alembic upgrade head` then uvicorn), `web` (Vite dev server proxying `/api`). API Dockerfile installs with `uv sync --frozen` from the committed lockfile so the container matches the local venv exactly.
+Add to the existing `docker-compose.yml`: `api` (depends on `db` healthy, runs `alembic upgrade head` then uvicorn; Dockerfile installs with `uv sync --frozen` from the committed lockfile so the container matches the local venv exactly) and `web` (Vite dev server proxying `/api` as above). The Vite dev server *is* the deliberate web runtime for this take-home — the README (Task 23) says so explicitly rather than letting it read as an oversight.
 
 - [ ] **Step 6: Verify end to end**
 
-Run: `docker compose up --build`, open the SPA, upload a PDF, confirm it transitions `pending → ready` and its text is stored.
+Run: `docker compose up --build`, open the SPA, upload a PDF, confirm `extraction_status` transitions `pending → ready` and its text is stored.
 
 - [ ] **Step 7: Commit** — `feat: containerise api, web, and postgres with pgvector`
+
+---
+
+### Task 5b: PDF page cap
+
+Spec §8 lists a page cap among the input limits; the mime allowlist, the 5 MB upload cap, and the paste-length cap are already enforced (Task 4). A 5 MB PDF can still hold thousands of pages, and parsing runs inside the request — this is the last missing input limit.
+
+**Files:**
+- Modify: `api/src/career_intel/ingest/parsing.py`, `api/tests/unit/test_parsing.py`
+
+**Interfaces:**
+- Produces: `MAX_PDF_PAGES: int = 50` in `parsing.py`; `parse_document` raises `UnsupportedDocumentError` for PDFs over the cap, before extracting any text
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+def test_rejects_pdf_over_page_cap(many_page_pdf_bytes):
+    # Fixture builds a pypdf-generated PDF with MAX_PDF_PAGES + 1 blank pages.
+    with pytest.raises(UnsupportedDocumentError):
+        parse_document(many_page_pdf_bytes, "long.pdf", "application/pdf")
+```
+
+- [ ] **Step 2: Run and watch fail**
+- [ ] **Step 3: Implement** — check `len(reader.pages)` against `MAX_PDF_PAGES` before extracting text from any page.
+- [ ] **Step 4: Run and watch pass**
+- [ ] **Step 5: Commit** — `feat(ingest): cap pdf page count`
 
 **🚩 PHASE 1 CHECKPOINT** — the stack runs, uploads work, nothing calls an LLM. Stop and review before proceeding.
 
@@ -361,14 +412,21 @@ Run: `docker compose up --build`, open the SPA, upload a PDF, confirm it transit
 
 ---
 
-### Task 6: LLM provider interface, fakes, and call telemetry
+### Task 6: Observability spine, LLM provider interface, fakes, and call telemetry
 
 **Files:**
-- Create: `api/src/career_intel/llm/{protocol,tokens,openai_client,fakes}.py`, `api/src/career_intel/models/telemetry.py`, `api/tests/unit/test_llm_telemetry.py`, migration `0002_telemetry`
+- Create: `api/src/career_intel/observability.py`, `api/src/career_intel/llm/{protocol,tokens,openai_client,fakes}.py`, `api/src/career_intel/models/telemetry.py`, `api/tests/unit/{test_observability.py,test_llm_telemetry.py}`, migration `0002_telemetry`
+- Modify: `api/src/career_intel/api/app.py` (wire middleware + logging config)
 
 **Interfaces:**
 - Produces:
   ```python
+  # observability.py
+  request_id_var: ContextVar[str | None]       # set by middleware, read by OpenAIClient
+  def configure_logging() -> None              # structlog JSON config; request_id bound into every log line
+  class RequestIdMiddleware                    # honours inbound X-Request-ID, else uuid4;
+                                               # echoes the id on the response header
+
   T = TypeVar("T", bound=BaseModel)
 
   class Embedder(Protocol):
@@ -382,32 +440,67 @@ Run: `docker compose up --build`, open the SPA, upload a PDF, confirm it transit
   def count_tokens(text: str) -> int          # tiktoken
   class FakeEmbedder(Embedder)                 # deterministic hash-based vectors
   class FakeLLM(LLMClient)                     # returns queued canned responses
+
+  class OpenAIClient:
+      def __init__(self, *, session_factory, settings, raw=None): ...
   ```
+- Migration `0002` creates **both** telemetry tables: `llm_calls` (`purpose`, `model`, `prompt_tokens`, `completion_tokens`, `latency_ms`, `cost_usd`, `request_id` **nullable** — background tasks have no request, `created_at`) and `retrieval_traces` (`request_id` nullable, `query`, `results` jsonb, `created_at`). Task 11 writes `retrieval_traces`; Task 22 reads both, grouped by `request_id`.
 
 `purpose` is a required keyword on every call — it is what makes the `llm_calls` table readable ("resume_extraction", "fit_analysis", "chat", "interview_prep") instead of an undifferentiated log.
 
-- [ ] **Step 1: Write the failing test**
+**Why `session_factory`, not `session`:** telemetry is written *during* the network phase. A shared injected session autobegins a transaction on the first telemetry write, and that transaction would then be held open across the next OpenAI call — exactly the violation non-negotiable #4 exists to prevent — and a failed batch would roll back the telemetry rows describing the failure. Each call therefore writes its `llm_calls` row in its own short-lived session and commits immediately.
+
+- [ ] **Step 1: Write the failing tests**
 
 ```python
+# api/tests/unit/test_observability.py
+def test_each_request_gets_a_distinct_request_id(client):
+    a = client.get("/health").headers["x-request-id"]
+    b = client.get("/health").headers["x-request-id"]
+    assert a and b and a != b
+
+def test_inbound_request_id_is_honoured(client):
+    response = client.get("/health", headers={"X-Request-ID": "abc-123"})
+    assert response.headers["x-request-id"] == "abc-123"
+```
+
+```python
+# api/tests/unit/test_llm_telemetry.py
 @pytest.mark.asyncio
-async def test_every_structured_call_records_an_llm_call_row(session, openai_stub):
-    client = OpenAIClient(session=session, settings=settings, raw=openai_stub)
+async def test_every_structured_call_records_a_committed_llm_call_row(session_factory, openai_stub):
+    client = OpenAIClient(session_factory=session_factory, settings=settings, raw=openai_stub)
     await client.structured(purpose="resume_extraction", system="s", user="u", schema=ResumeExtraction)
 
-    row = (await session.execute(select(LlmCall))).scalar_one()
+    # A *fresh* session must see the row: telemetry commits immediately in its
+    # own session, never inside a caller's transaction.
+    async with session_factory() as fresh:
+        row = (await fresh.execute(select(LlmCall))).scalar_one()
     assert row.purpose == "resume_extraction"
     assert row.prompt_tokens > 0
     assert row.latency_ms >= 0
     assert row.cost_usd > 0
+
+@pytest.mark.asyncio
+async def test_llm_call_row_carries_request_id_when_in_request_context(session_factory, openai_stub):
+    token = request_id_var.set("req-42")
+    try:
+        client = OpenAIClient(session_factory=session_factory, settings=settings, raw=openai_stub)
+        await client.text(purpose="chat", system="s", user="u")
+    finally:
+        request_id_var.reset(token)
+
+    async with session_factory() as fresh:
+        row = (await fresh.execute(select(LlmCall))).scalar_one()
+    assert row.request_id == "req-42"
 ```
 
 - [ ] **Step 2: Run and watch fail**
 - [ ] **Step 3: Implement**
 
-`FakeEmbedder` derives vectors deterministically from a hash of the text, so similarity is stable across runs and tests can assert ordering without network. Cost is computed from a per-model price table in `constants.py`.
+`FakeEmbedder` derives vectors deterministically from a hash of the text, so similarity is stable across runs and tests can assert ordering without network. Cost is computed from a per-model price table in `constants.py`. `RequestIdMiddleware` sets `request_id_var`; `OpenAIClient` reads it — `None` outside a request (background enrichment) — and stamps it on the row.
 
 - [ ] **Step 4: Run and watch pass**
-- [ ] **Step 5: Commit** — `feat(llm): add provider protocol, fakes, and call telemetry`
+- [ ] **Step 5: Commit** — `feat(llm): add observability spine, provider protocol, fakes, and call telemetry`
 
 ---
 
@@ -540,6 +633,7 @@ Both return `None` after one retry on schema-validation failure — the caller t
 
 **Interfaces:**
 - Produces: `Chunk`, `EvidenceUnit` (`char_start`/`char_end` **nullable**), `Requirement` — each with `embedding: Vector(EMBEDDING_DIM)`, each with an HNSW index
+- Final signature of the Task 4 seam: `async def enrich_document(document_id: UUID, *, llm: LLMClient | None = None, embedder: Embedder | None = None) -> None` — `None` means "build the real clients from settings"; tests inject fakes. (The plan originally called this `ingest_document`; the implemented name is `enrich_document`.)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -547,7 +641,7 @@ Both return `None` after one retry on schema-validation failure — the caller t
 @pytest.mark.asyncio
 async def test_resume_ingest_produces_located_evidence(session, fake_llm, fake_embedder):
     doc = await _seed_resume(session, RAW)
-    await ingest_document(doc.id, llm=fake_llm, embedder=fake_embedder)
+    await enrich_document(doc.id, llm=fake_llm, embedder=fake_embedder)
 
     await session.refresh(doc)
     assert doc.status == "ready"
@@ -562,7 +656,7 @@ async def test_resume_ingest_produces_located_evidence(session, fake_llm, fake_e
 @pytest.mark.asyncio
 async def test_extraction_failure_degrades_to_chunks(session, failing_llm, fake_embedder):
     doc = await _seed_resume(session, RAW)
-    await ingest_document(doc.id, llm=failing_llm, embedder=fake_embedder)
+    await enrich_document(doc.id, llm=failing_llm, embedder=fake_embedder)
 
     await session.refresh(doc)
     assert doc.status == "ready"            # still usable
@@ -571,7 +665,7 @@ async def test_extraction_failure_degrades_to_chunks(session, failing_llm, fake_
 ```
 
 - [ ] **Step 2: Run and watch fail**
-- [ ] **Step 3: Implement** — pipeline order: parse → chunk → extract → locate quotes → embed everything in one batched call → **open transaction** → write all rows → commit. All network work precedes the transaction (spec §3). Migration comment records the HNSW caveat: approximate index, no benefit at this corpus size, present so the schema is the one that scales.
+- [ ] **Step 3: Implement** — enrichment order (parsing already happened in the request, Task 4): chunk → extract → locate quotes → embed everything in one batched call → **open transaction** → write all rows and settle `extraction_status` → commit. All network work precedes the transaction (spec §3). Migration comment records the HNSW caveat: approximate index, no benefit at this corpus size, present so the schema is the one that scales.
 - [ ] **Step 4: Run and watch pass**
 - [ ] **Step 5: Commit** — `feat(ingest): persist embedded chunks, evidence, and requirements`
 
@@ -585,7 +679,7 @@ async def test_extraction_failure_degrades_to_chunks(session, failing_llm, fake_
 
 ---
 
-### Task 11: Evidence retrieval
+### Task 11: Evidence and chunk retrieval
 
 **Files:** Create `api/src/career_intel/analysis/retrieval.py`, `api/tests/unit/test_retrieval.py`
 
@@ -598,16 +692,31 @@ class EvidenceCandidate:
     text: str
     score: float
 
+@dataclass(frozen=True)
+class ChunkCandidate:
+    chunk_id: UUID
+    handle: str        # "c1", "c2"
+    text: str
+    char_start: int
+    char_end: int
+    score: float
+
 async def nearest_evidence(session, *, resume_doc_id: UUID,
                            requirement_embedding: list[float],
                            k: int = 5) -> list[EvidenceCandidate]
+
+async def nearest_chunks(session, *, document_id: UUID,
+                         query_embedding: list[float],
+                         k: int = 5) -> list[ChunkCandidate]
 ```
 
-- [ ] **Step 1: Write the failing test** — seed three evidence units with known `FakeEmbedder` vectors, query with a vector near the second, assert it ranks first and that results are scoped to the given `resume_doc_id` (a unit belonging to another document must never appear).
+`nearest_evidence` serves the fit engine (Task 13); `nearest_chunks` serves chat (Task 17), whose context includes top-k resume chunks per spec §6 — nothing else defines chunk retrieval. **Both functions write a `retrieval_traces` row** (ids + scores, table from Task 6) with the current request id: spec §10 says every retrieval is traced, and Task 22 renders these.
+
+- [ ] **Step 1: Write the failing tests** — for each function: seed three records with known `FakeEmbedder` vectors, query with a vector near the second, assert it ranks first and that results are scoped to the given document id (a record belonging to another document must never appear). Plus: after a query, exactly one `retrieval_traces` row exists and its `results` carries the returned ids and scores.
 - [ ] **Step 2: Run and watch fail**
-- [ ] **Step 3: Implement** — pgvector cosine distance ordering, `WHERE document_id = :resume_doc_id`, `LIMIT k`. Handles are assigned positionally at call time.
+- [ ] **Step 3: Implement** — pgvector cosine distance ordering, `WHERE document_id = :document_id`, `LIMIT k`. Handles are assigned positionally at call time. Trace rows are committed in their own short-lived session, same reasoning as Task 6's telemetry.
 - [ ] **Step 4: Run and watch pass**
-- [ ] **Step 5: Commit** — `feat(analysis): retrieve nearest resume evidence per requirement`
+- [ ] **Step 5: Commit** — `feat(analysis): retrieve nearest resume evidence and chunks with traces`
 
 ---
 
@@ -670,7 +779,7 @@ def test_duplicate_handles_collapse():
 ### Task 13: Fit analysis engine
 
 **Files:** Create `api/src/career_intel/analysis/{schemas,engine}.py`, `api/src/career_intel/models/analysis.py`, migration `0004_fit_analyses`, `api/tests/unit/test_fit_engine.py`
-- Modify: `api/src/career_intel/ingest/pipeline.py` (trigger analysis when a document reaches `ready`)
+- Modify: `api/src/career_intel/ingest/pipeline.py` (trigger analysis after enrichment; extend `fail_orphaned_pending_rows` to sweep `fit_analyses` too), `api/tests/unit/test_startup_sweep.py`
 
 **Interfaces:**
 ```python
@@ -687,6 +796,43 @@ MAX_REQUIREMENTS_PER_BATCH = 10
 
 async def run_fit_analysis(session, *, resume_doc_id: UUID, job_doc_id: UUID,
                            llm: LLMClient) -> FitAnalysis
+
+async def schedule_fit_analyses(session) -> list[UUID]
+    # Inserts a pending fit_analyses row for every (resume, job) pair where
+    # BOTH documents have extraction_status='ready' and no row exists yet,
+    # via INSERT .. ON CONFLICT (resume_doc_id, job_doc_id) DO NOTHING.
+    # Returns only the ids IT claimed — the caller computes exactly those.
+```
+
+Persisted models (`models/analysis.py`, from spec §4):
+
+```python
+class FitAnalysis(Base):        # fit_analyses
+    id: UUID
+    resume_doc_id: UUID         # FK documents, ON DELETE CASCADE
+    job_doc_id: UUID            # FK documents, ON DELETE CASCADE
+    status: Literal["pending", "ready", "failed"]
+    overall_score: float | None # null until ready
+    summary: str | None
+    model: str
+    created_at: datetime
+    # UNIQUE(resume_doc_id, job_doc_id)
+
+class RequirementMatch(Base):   # requirement_matches
+    id: UUID
+    fit_analysis_id: UUID       # FK, CASCADE
+    requirement_id: UUID        # FK requirements
+    verdict: Literal["strong", "partial", "missing"]
+    rationale: str
+    # Deliberately NO per-requirement score column: the weight is fully
+    # derivable from verdict via VERDICT_WEIGHT (Task 12); persisting it
+    # would store a computed value that can drift from its inputs.
+    # (Spec §4 listed a score column — update the spec in Step 5a.)
+
+class MatchEvidence(Base):      # match_evidence
+    id: UUID
+    requirement_match_id: UUID  # FK, CASCADE
+    evidence_unit_id: UUID      # FK evidence_units
 ```
 
 - [ ] **Step 1: Write the failing tests**
@@ -718,6 +864,36 @@ async def test_failure_marks_analysis_failed_not_pending(session, exploding_llm)
     with pytest.raises(Exception):
         await run_fit_analysis(...)
     assert (await _reload(analysis)).status == "failed"
+
+@pytest.mark.asyncio
+async def test_concurrent_scheduling_claims_each_pair_once(session_factory):
+    """A resume and a job can finish enrichment at nearly the same moment;
+    each background task sees the pair as newly complete. ON CONFLICT
+    DO NOTHING plus compute-only-what-you-claimed prevents double work."""
+    await _seed_ready_resume_and_job(session_factory)
+    async with session_factory() as s1, session_factory() as s2:
+        claimed = await asyncio.gather(
+            schedule_fit_analyses(s1), schedule_fit_analyses(s2)
+        )
+    assert sorted(len(c) for c in claimed) == [0, 1]
+
+@pytest.mark.asyncio
+async def test_extraction_failed_job_is_never_scheduled(session):
+    """A job that degraded to chunk RAG has zero requirements; an analysis
+    over it would be a confidently empty verdict. Spec §3: such a job is
+    answerable in chat but cannot produce a fit analysis."""
+    await _seed_ready_resume(session)
+    await _seed_job(session, extraction_status="failed")
+    assert await schedule_fit_analyses(session) == []
+
+@pytest.mark.asyncio
+async def test_startup_sweep_fails_pending_analyses(session):
+    # Extends Task 4's sweep: spec §3 names BOTH documents and fit_analyses.
+    # Lives in test_startup_sweep.py.
+    analysis = await _seed_analysis(session, status="pending")
+    await fail_orphaned_pending_rows(session)
+    await session.refresh(analysis)
+    assert analysis.status == "failed"
 ```
 
 - [ ] **Step 2: Run and watch fail**
@@ -725,10 +901,11 @@ async def test_failure_marks_analysis_failed_not_pending(session, exploding_llm)
 
 Per requirement, retrieve candidates (Task 11). Assign handles `r1…rN` / `e1…eM`. Batch requirements in groups of `MAX_REQUIREMENTS_PER_BATCH`. One `structured` call per batch. Validate returned handles (Task 12). Map handles back to UUIDs in Python. Compute the overall score (Task 12). Persist `FitAnalysis`, `RequirementMatch`, `MatchEvidence` in one transaction after all network work.
 
-Trigger: when a document reaches `ready`, insert a `pending` `fit_analyses` row for each newly-complete `(resume, job)` pair and compute it in the same background task. Replacing the resume deletes the old document; analyses cascade and are recomputed.
+Trigger: at the end of successful enrichment, call `schedule_fit_analyses` and compute the claimed rows in the same background task. Only pairs where both documents have `extraction_status='ready'` qualify — an extraction-failed job stays chat-only (its UI treatment lands in Task 16). The `ON CONFLICT DO NOTHING` insert makes concurrent triggers safe. Extend `fail_orphaned_pending_rows` to sweep `fit_analyses.status` alongside the document columns. Replacing the resume deletes the old document; analyses cascade and are recomputed.
 
 - [ ] **Step 4: Run and watch pass**
-- [ ] **Step 5: Commit** — `feat(analysis): score every requirement against retrieved resume evidence`
+- [ ] **Step 5: Update spec §4** — remove the `score` column from `requirement_matches` (verdict is persisted; weight derives from `VERDICT_WEIGHT` in Python), matching the project habit of keeping the spec truthful (cf. §3 update in commit `02069aa`).
+- [ ] **Step 6: Commit** — `feat(analysis): score every requirement against retrieved resume evidence`
 
 ---
 
@@ -741,8 +918,40 @@ Trigger: when a document reaches `ready`, insert a `pending` `fit_analyses` row 
 - `GET /analyses/{job_doc_id}` → full breakdown: matches grouped strong/partial/missing, each with `rationale` and evidence carrying `{text, char_start, char_end}`
 - `POST /analyses/{job_doc_id}/retry` → re-runs a `failed` analysis
 
-- [ ] **Step 1: Write the failing tests** — a `pending` analysis returns `status: "pending"` with a null score rather than 404; a `ready` one returns matches with citation offsets; retry on a `failed` analysis returns 202.
-- [ ] **Step 2–4: Fail → implement → pass.** Handlers stay thin — they call `analysis/` services and serialise.
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# api/tests/unit/test_analyses_route.py
+def test_pending_analysis_returns_status_not_404(client, pending_analysis):
+    response = client.get(f"/analyses/{pending_analysis.job_doc_id}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "pending"
+    assert body["overall_score"] is None
+
+def test_ready_analysis_returns_matches_with_citation_offsets(client, ready_analysis):
+    body = client.get(f"/analyses/{ready_analysis.job_doc_id}").json()
+    assert body["status"] == "ready"
+    assert 0.0 <= body["overall_score"] <= 1.0
+    evidence = [e for m in body["matches"] for e in m["evidence"]]
+    assert any(e["char_start"] is not None for e in evidence)
+    for match in body["matches"]:
+        assert match["verdict"] in {"strong", "partial", "missing"}
+        assert match["rationale"]
+
+def test_retry_on_failed_analysis_returns_202(client, failed_analysis):
+    response = client.post(f"/analyses/{failed_analysis.job_doc_id}/retry")
+    assert response.status_code == 202
+
+def test_retry_on_ready_analysis_returns_409(client, ready_analysis):
+    # Recomputing a good analysis silently costs money and can change verdicts.
+    response = client.post(f"/analyses/{ready_analysis.job_doc_id}/retry")
+    assert response.status_code == 409
+```
+
+- [ ] **Step 2: Run and watch fail**
+- [ ] **Step 3: Implement.** Handlers stay thin — they call `analysis/` services and serialise.
+- [ ] **Step 4: Run and watch pass**
 - [ ] **Step 5: Commit** — `feat(api): expose fit analyses`
 
 ---
@@ -763,11 +972,11 @@ Design is an explicit evaluation criterion, not leftover polish. Do this *before
 **Files:** Create `web/src/components/{JobRail,AnalysisPane,RequirementRow}.tsx`, `web/src/hooks/useAnalysis.ts`, `web/src/components/__tests__/{JobRail,AnalysisPane}.test.tsx`
 - Modify: `web/src/App.tsx` (three-region layout)
 
-- [ ] **Step 1: Write the failing tests** — the rail renders each job with its score and marks the selected one; a `pending` analysis shows "analysing…" not an empty pane; a `failed` one shows a retry button; a requirement with located evidence renders its quote, and one without renders the verdict *without* a broken citation link.
+- [ ] **Step 1: Write the failing tests** — the rail renders each job with its score and marks the selected one; a `pending` analysis shows "analysing…" not an empty pane; a `failed` one shows a retry button; a requirement with located evidence renders its quote, and one without renders the verdict *without* a broken citation link; a job whose `extraction_status` is `failed` shows "no fit analysis — still answerable in chat" instead of an analysis pane (spec §3's degradation path, scheduled around in Task 13).
 - [ ] **Step 2: Run and watch fail**
 - [ ] **Step 3: Implement** to the Task 15 design. Poll analyses while any is `pending`.
 - [ ] **Step 4: Run and watch pass**
-- [ ] **Step 5: Verify in the browser** — `docker compose up`, upload the golden resume and three job posts, confirm scores and citations render and that clicking a citation highlights the right span.
+- [ ] **Step 5: Verify in the browser** — `docker compose up`, upload a sample resume and three job posts (the golden fixtures do not exist until Task 21), confirm scores and citations render and that clicking a citation highlights the right span.
 - [ ] **Step 6: Commit** — `feat(web): add job rail and requirement-level analysis pane`
 
 **🚩 PHASE 3 CHECKPOINT — SUBMITTABLE.** Take screenshots now, before adding anything else.
@@ -811,13 +1020,72 @@ async def build_context(session, *, scope: Literal["job", "all"],
 
 ### Task 18: Chat service and endpoint
 
+**Scope model — decided here, consumed by Task 19:** scope travels **per message**, not per session. The session binds `job_doc_id` (which job the dock is open on); each message request carries the toggle's current value and it is persisted on the message row for faithful re-rendering. Flipping the toggle mid-conversation must keep the history — a per-session scope would force a fresh session and lose it. The guardrail survives intact: scope is still UI state sent explicitly, never inferred from the question text.
+
 **Files:** Create `api/src/career_intel/chat/service.py`, `api/src/career_intel/models/chat.py`, `api/src/career_intel/api/routes/chat.py`, migration `0005_chat`, `api/tests/unit/test_chat_service.py`
 
-**Interfaces:** `POST /chat/sessions` → `{id}`; `POST /chat/sessions/{id}/messages` `{content}` → `{content, citations}`; `GET /chat/sessions/{id}/messages`
+**Interfaces:**
+- `POST /chat/sessions` `{job_doc_id?}` → `{id}`
+- `POST /chat/sessions/{id}/messages` `{content, scope: "job" | "all"}` → `{content, citations: list[Citation]}`
+- `GET /chat/sessions/{id}/messages` → history, each message carrying the scope it was asked under
+- ```python
+  class ChatService:
+      async def send(self, session_id: UUID, *, content: str,
+                     scope: Literal["job", "all"]) -> ChatReply
 
-- [ ] **Step 1: Write the failing tests** — answers cite only supplied handles (reuse `validate_handles`); an off-topic question is redirected rather than answered generally; a question with no supporting evidence yields an explicit "no evidence in your resume" rather than an invented claim; the session's `scope` is read from the row, never inferred from the question.
-- [ ] **Step 2–4: Fail → implement → pass**
-- [ ] **Step 5: Commit** — `feat(chat): answer grounded questions with validated citations`
+  class ChatReply(BaseModel):
+      content: str
+      citations: list[str]     # validated handles, mapped to spans for the response
+  ```
+- Migration `0005`: `chat_sessions` (id, `job_doc_id` nullable FK, created_at — **no scope column**) and `chat_messages` (session_id FK, role, content, `scope`, citations jsonb, created_at)
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# api/tests/unit/test_chat_service.py
+@pytest.mark.asyncio
+async def test_scope_comes_from_the_request_not_the_question(chat_service, fake_llm, two_jobs):
+    """The question mentions comparing jobs, but scope="job" must still bind
+    context to the session's job only. UI state, never prompt inference."""
+    await chat_service.send(session_id, content="compare all my jobs", scope="job")
+    assert two_jobs.other_job.title not in fake_llm.last_user_prompt
+
+@pytest.mark.asyncio
+async def test_all_scope_includes_every_cached_analysis(chat_service, fake_llm, two_jobs):
+    await chat_service.send(session_id, content="which fits best?", scope="all")
+    assert two_jobs.job.title in fake_llm.last_user_prompt
+    assert two_jobs.other_job.title in fake_llm.last_user_prompt
+
+@pytest.mark.asyncio
+async def test_invented_citation_handles_are_dropped(chat_service, lying_llm, offered_handles):
+    # lying_llm cites "c99", never offered. Reuses validate_handles (Task 12).
+    reply = await chat_service.send(session_id, content="Do I know Python?", scope="job")
+    assert set(reply.citations) <= offered_handles
+
+@pytest.mark.asyncio
+async def test_no_evidence_yields_explicit_absence_not_invention(chat_service, fake_llm):
+    fake_llm.queue_text("Your resume shows no Kubernetes experience.")
+    reply = await chat_service.send(session_id, content="Do I know Kubernetes?", scope="job")
+    assert reply.citations == []          # an absence claim cites nothing
+
+@pytest.mark.asyncio
+async def test_system_prompt_carries_the_off_topic_redirect_rule(chat_service, fake_llm):
+    await chat_service.send(session_id, content="write me a poem", scope="job")
+    assert "only about" in fake_llm.last_system_prompt.lower()
+    # Behavioural check runs live in Task 21; unit tests assert the rule ships.
+
+@pytest.mark.asyncio
+async def test_message_row_persists_the_scope_it_was_asked_under(chat_service, session):
+    await chat_service.send(session_id, content="hi", scope="all")
+    row = (await session.execute(select(ChatMessage).where(ChatMessage.role == "user"))).scalar_one()
+    assert row.scope == "all"
+```
+
+- [ ] **Step 2: Run and watch fail**
+- [ ] **Step 3: Implement** — context via `build_context` (Task 17) + `nearest_chunks` (Task 11); all network before any write, citations validated then mapped to spans in Python.
+- [ ] **Step 4: Run and watch pass**
+- [ ] **Step 5: Update spec §4 and §6** — `chat_sessions` loses `scope`, `chat_messages` gains it; §6 wording changes from session scope to per-message scope. Same spec-truthfulness habit as Task 13.
+- [ ] **Step 6: Commit** — `feat(chat): answer grounded questions with validated citations`
 
 ---
 
@@ -825,8 +1093,27 @@ async def build_context(session, *, scope: Literal["job", "all"],
 
 **Files:** Create `web/src/components/ChatDock.tsx`, `web/src/hooks/useChat.ts`, `web/src/components/__tests__/ChatDock.test.tsx`
 
-- [ ] **Step 1: Write the failing tests** — the scope toggle switches between "this job" and "all jobs" and is sent with the request; citations render as clickable references; the input disables while a response is in flight.
-- [ ] **Step 2–4: Fail → implement → pass**
+- [ ] **Step 1: Write the failing tests**
+
+```tsx
+// web/src/components/__tests__/ChatDock.test.tsx
+it("sends the toggle's current scope with each message", async () => {
+  // Scope is per message (Task 18): flip the toggle, send, assert the request
+  // body carries scope: "all" while earlier messages kept their own scope.
+  render(<ChatDock jobDocId="j1" />);
+  await user.click(screen.getByRole("switch", { name: /all jobs/i }));
+  await user.type(screen.getByRole("textbox"), "which should I apply to?{Enter}");
+  expect(lastPostBody()).toMatchObject({ scope: "all" });
+});
+
+it("renders citations as clickable references", async () => { /* click → highlight callback fires */ });
+
+it("disables the input while a response is in flight", async () => { /* pending mutation → textbox disabled */ });
+```
+
+- [ ] **Step 2: Run and watch fail**
+- [ ] **Step 3: Implement** — the toggle is local UI state included in every `POST .../messages` body; history renders each message under the scope stored on its row.
+- [ ] **Step 4: Run and watch pass**
 - [ ] **Step 5: Commit** — `feat(web): add docked chat with explicit scope toggle`
 
 ---
@@ -847,11 +1134,64 @@ class PrepQuestionOut(BaseModel):
 async def generate_prep(session, *, fit_analysis_id: UUID, llm: LLMClient) -> InterviewPrep
 ```
 
-`GET /prep/{job_doc_id}` generates on first request and caches thereafter (`UNIQUE(fit_analysis_id)`).
+Persisted models (`models/prep.py`, from spec §4):
 
-- [ ] **Step 1: Write the failing tests** — 5–8 questions; every question anchors to a real requirement of *that* job; evidence handles pass validation; a second request returns the cached row without a further LLM call; requesting prep for a non-`ready` analysis returns 409 rather than generating from nothing.
-- [ ] **Step 2–4: Fail → implement → pass.** Input is the cached fit analysis only — no new retrieval.
-- [ ] **Step 5: Commit** — `feat(prep): derive interview questions from the fit analysis`
+```python
+class InterviewPrep(Base):      # interview_preps
+    id: UUID
+    fit_analysis_id: UUID       # FK, CASCADE — UNIQUE(fit_analysis_id)
+    model: str
+    created_at: datetime
+
+class PrepQuestion(Base):       # prep_questions
+    id: UUID
+    interview_prep_id: UUID     # FK, CASCADE
+    requirement_id: UUID        # FK requirements
+    question: str
+    why_they_will_ask: str
+    how_to_frame: str
+    evidence_ids: list[UUID]    # validated before persisting
+```
+
+**Routes — generation is a POST, reading is a GET.** `POST /prep/{job_doc_id}` generates and returns the prep (`200`, or the cached row if one exists); `GET /prep/{job_doc_id}` is read-only and returns `404` until generated. A generating GET would be non-idempotent: TanStack Query's refetch-on-focus or a double-click fires two concurrent generations that race the `UNIQUE(fit_analysis_id)` constraint and bill two LLM calls. The POST handles the race with `INSERT ... ON CONFLICT (fit_analysis_id) DO NOTHING` and returns the surviving row.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# api/tests/unit/test_prep_service.py
+@pytest.mark.asyncio
+async def test_generates_five_to_eight_questions_anchored_to_real_requirements(session, fake_llm, ready_analysis):
+    prep = await generate_prep(session, fit_analysis_id=ready_analysis.id, llm=fake_llm)
+    questions = (await session.execute(select(PrepQuestion))).scalars().all()
+    assert 5 <= len(questions) <= 8
+    job_requirement_ids = {r.id for r in ready_analysis.job_requirements}
+    assert all(q.requirement_id in job_requirement_ids for q in questions)
+
+@pytest.mark.asyncio
+async def test_invented_evidence_handles_are_dropped(session, lying_llm, ready_analysis):
+    await generate_prep(session, fit_analysis_id=ready_analysis.id, llm=lying_llm)
+    persisted = {eid for q in (await session.execute(select(PrepQuestion))).scalars() for eid in q.evidence_ids}
+    assert persisted <= ready_analysis.offered_evidence_ids
+
+def test_second_post_returns_cached_row_without_llm_call(client, fake_llm, ready_analysis):
+    first = client.post(f"/prep/{ready_analysis.job_doc_id}").json()
+    second = client.post(f"/prep/{ready_analysis.job_doc_id}").json()
+    assert second["id"] == first["id"]
+    assert fake_llm.call_count == 1
+
+def test_post_for_non_ready_analysis_returns_409(client, pending_analysis):
+    # Generating from a pending analysis would derive questions from nothing.
+    assert client.post(f"/prep/{pending_analysis.job_doc_id}").status_code == 409
+
+def test_get_before_generation_returns_404(client, ready_analysis):
+    assert client.get(f"/prep/{ready_analysis.job_doc_id}").status_code == 404
+```
+
+- [ ] **Step 2: Run and watch fail**
+- [ ] **Step 3: Implement.** Input is the cached fit analysis only — no new retrieval. All network before the transaction; validate handles with `validate_handles` (Task 12) before persisting.
+- [ ] **Step 4: Run and watch pass**
+- [ ] **Step 5: Frontend** — `PrepPane` triggers the POST on first open (button or effect), renders cached prep from the GET thereafter; test that a second open issues no POST.
+- [ ] **Step 6: Commit** — `feat(prep): derive interview questions from the fit analysis`
 
 ---
 
@@ -879,8 +1219,38 @@ What converts claims in the README into things a reviewer can see.
 
 **Files:** Create `api/src/career_intel/api/routes/traces.py`, `web/src/components/TraceDrawer.tsx`, tests for both
 
-- [ ] **Step 1: Write the failing tests** — `GET /traces/{request_id}` returns the LLM calls and retrievals for that request; the drawer renders tokens, latency, cost, and retrieval scores; raw document text never appears in a trace payload (PII, spec §8).
-- [ ] **Step 2–4: Fail → implement → pass**
+**Interfaces:**
+- Consumes: `llm_calls.request_id` and the `retrieval_traces` table, both created in Task 6 and written by Tasks 6/11 — this task only *reads*; if those rows are not being written, fix that there, not here. The API returns the request id on every response header (Task 6 middleware), which is how the frontend knows what to ask for.
+- Produces: `GET /traces/{request_id}` → `{llm_calls: [...], retrievals: [...]}`
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# api/tests/unit/test_traces_route.py
+def test_traces_endpoint_groups_calls_and_retrievals_by_request_id(client, seeded_traces):
+    body = client.get(f"/traces/{seeded_traces.request_id}").json()
+    call = body["llm_calls"][0]
+    assert call["purpose"] and call["prompt_tokens"] > 0 and call["cost_usd"] > 0
+    assert body["retrievals"][0]["results"]          # ids + scores
+
+def test_other_requests_traces_are_not_returned(client, seeded_traces):
+    body = client.get(f"/traces/{seeded_traces.request_id}").json()
+    assert all(c["request_id"] == seeded_traces.request_id for c in body["llm_calls"])
+
+def test_trace_payload_never_contains_raw_document_text(client, seeded_traces):
+    # A resume is PII (spec §8). Traces carry ids, scores, and counts — never text.
+    body = client.get(f"/traces/{seeded_traces.request_id}").text
+    assert seeded_traces.raw_resume_text not in body
+```
+
+```tsx
+// web/src/components/__tests__/TraceDrawer.test.tsx
+it("renders tokens, latency, cost, and retrieval scores for the interaction", async () => { /* ... */ });
+```
+
+- [ ] **Step 2: Run and watch fail**
+- [ ] **Step 3: Implement**
+- [ ] **Step 4: Run and watch pass**
 - [ ] **Step 5: Commit** — `feat: surface llm call and retrieval traces in the UI`
 
 ---
@@ -889,7 +1259,7 @@ What converts claims in the README into things a reviewer can see.
 
 **Files:** Create `README.md`, `docs/screenshots/`
 
-- [ ] **Step 1: Write the README** covering, in your own words: quick setup; architecture diagram; **why requirement-level retrieval instead of chunk-similarity RAG**; why pgvector over Qdrant/Chroma; chunking approach *and why it is deliberately not the primary mechanism*; embedding and LLM selection; prompt and context management; guardrails; quality controls with the Task 21 baseline numbers; observability; what productionising on AWS requires; **known edge cases from spec §13, stated plainly**; how AI tools were used; what you would do differently with more time.
+- [ ] **Step 1: Write the README** covering, in your own words: quick setup; architecture diagram; **why requirement-level retrieval instead of chunk-similarity RAG**; why pgvector over Qdrant/Chroma; chunking approach *and why it is deliberately not the primary mechanism*; embedding and LLM selection; prompt and context management; guardrails; quality controls with the Task 21 baseline numbers; observability; what productionising on AWS requires; **known edge cases from spec §13, stated plainly**; how AI tools were used; what you would do differently with more time. Also state plainly: running tests requires `docker compose up -d db` first, and the `web` container deliberately runs the Vite dev server for this take-home.
 - [ ] **Step 2: Capture screenshots** — dashboard, requirement breakdown with a citation, chat with a cross-job comparison, prep pane, trace drawer.
 - [ ] **Step 3: Verify from scratch** — `git clone` into a clean directory, follow your own README verbatim, confirm it works. Do not skip this. A README that only works on the machine it was written on is the most common way these submissions fail.
 - [ ] **Step 4: Run the full suite** — `uv run pytest` and `npm test`, both green.
@@ -899,11 +1269,11 @@ What converts claims in the README into things a reviewer can see.
 
 ## Verification
 
-**Automated:** `cd api && uv run pytest` (unit + eval, no network) · `cd api && uv run pytest -m live` (real OpenAI) · `cd web && npm test` · `uv run ruff check` and `uv run mypy src`
+**Automated:** `docker compose up -d db` (the suite runs against real Postgres), then `cd api && uv run pytest` (unit + eval, no OpenAI) · `cd api && uv run pytest -m live` (real OpenAI) · `cd web && npm test` · `uv run ruff check` and `uv run mypy src`
 
 **End to end, in the browser:**
 1. `docker compose up --build` from a clean checkout
-2. Upload a resume PDF → transitions `pending → ready`
+2. Upload a resume PDF → appears immediately as `ready`, then `extraction_status` transitions `pending → ready`
 3. Paste two job postings → each analyses and appears in the rail with a score
 4. Open a job → requirements grouped by verdict, citations highlight real resume spans
 5. Ask "what am I missing here?" → gaps cited from the analysis
@@ -917,8 +1287,10 @@ What converts claims in the README into things a reviewer can see.
 
 ## Self-review notes
 
-Spec coverage checked section by section. §1–§7 map to Tasks 1–20; §8 guardrails are distributed (input limits Task 4, prompt delimiting Tasks 9/17, refusals Task 18, injection and bait evals Task 21); §9 → Task 21; §10 → Tasks 6 and 22; §11 → throughout; §12 → Tasks 1 and 5; §13 → Tasks 3 and 23; §14 → Task 23.
+Spec coverage checked section by section. §1–§7 map to Tasks 1–20; §8 guardrails are distributed (input limits Tasks 4/5b, prompt delimiting Tasks 9/17, refusals Task 18, injection and bait evals Task 21); §9 → Task 21; §10 → Task 6 (request-id middleware, `llm_calls`, `retrieval_traces` tables), Task 11 (trace writes), Task 22 (trace reads); §11 → throughout; §12 → Tasks 1 and 5; §13 → Tasks 3 and 23; §14 → Task 23.
 
-Type consistency verified across tasks: `EvidenceCandidate.handle` ↔ `RequirementVerdict.evidence_handles` ↔ `validate_handles`; `ScoredRequirement` ↔ `compute_overall_score`; `Span` ↔ nullable `char_start`/`char_end`; `Turn` ↔ `select_history` ↔ `build_context`.
+Type consistency verified across tasks: `EvidenceCandidate.handle` / `ChunkCandidate.handle` ↔ `RequirementVerdict.evidence_handles` ↔ `validate_handles`; `ScoredRequirement` ↔ `compute_overall_score`; `Span` ↔ nullable `char_start`/`char_end`; `Turn` ↔ `select_history` ↔ `build_context`; `enrich_document` (the as-built Task 4 name) ↔ Task 10's pipeline wiring.
 
-Two known ordering constraints: Task 8 (`locate_quote`) must precede Task 10, which persists located spans; Task 12's `validate_handles` must precede Tasks 13, 18, and 20, all three of which depend on it.
+Ordering constraints: Task 8 (`locate_quote`) precedes Task 10, which persists located spans; Task 12's `validate_handles` precedes Tasks 13, 18, and 20; Task 6 must land before Task 11 (`retrieval_traces` table) and Task 22 (`request_id` on `llm_calls`, response header); the per-message scope decision is made in Task 18 and consumed by Task 19.
+
+Decisions that deliberately diverge from the spec text, each with a spec-update step in its task: per-message chat scope (Task 18, spec §4/§6), no per-requirement `score` column (Task 13, spec §4). Prep generation is a POST rather than the spec's implied generate-on-GET (Task 20) — the spec never named a verb, so no spec edit is needed.
