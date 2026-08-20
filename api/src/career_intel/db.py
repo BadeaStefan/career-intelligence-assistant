@@ -33,3 +33,14 @@ async def get_session() -> AsyncIterator[AsyncSession]:
     """FastAPI dependency yielding a session per request."""
     async with get_session_factory()() as session:
         yield session
+
+
+def reset_engine() -> None:
+    """Drop the cached engine and session factory.
+
+    Needed by tests, which point the application at a different database after
+    this module has already been imported. Production never calls this.
+    """
+    global _engine, _session_factory
+    _engine = None
+    _session_factory = None

@@ -86,20 +86,36 @@ is never held open across an OpenAI call.
 
 ### Execution model
 
-Ingest runs in a FastAPI `BackgroundTask`: the upload endpoint writes the
-`documents` row with `status = 'pending'` and returns immediately; the frontend
-polls the document until `ready` or `failed`. When a document reaches `ready`,
-the same background task triggers fit analysis for every `(resume, job)` pair
-that now exists (§5). A full queue (SQS + worker, §14) is deliberately not built
-locally — `BackgroundTasks` gives the same non-blocking UX with none of the
-infrastructure, and the seam where a queue slots in is exactly this one
-function.
+The work splits along one line: **is it fast, local, and able to fail for a
+reason the user can act on?**
+
+**Parsing happens in the request.** PDF and DOCX extraction takes milliseconds,
+needs no network, and its failure modes — a scanned PDF, an unsupported type —
+are things the user must fix by uploading something else. Deferring it would
+mean returning `201`, then making the user poll to discover their upload was
+never usable, and it would require storing the raw file bytes in Postgres so a
+later task could read them. So the endpoint parses (on a threadpool, since
+pypdf is blocking), returns `415`/`422` directly on failure, and on success
+stores the text with `status = 'ready'`.
+
+**Enrichment happens in a `BackgroundTask`** — chunking, extraction, embedding,
+and then fit analysis for every `(resume, job)` pair that now exists (§5). This
+is the slow, networked half that genuinely cannot block an upload.
+`extraction_status` tracks it, and the frontend polls that. A full queue
+(SQS + worker, §14) is deliberately not built locally: `BackgroundTasks` gives
+the same non-blocking UX with none of the infrastructure, and the seam where a
+queue slots in is exactly this one function.
+
+This is why `status` and `extraction_status` are separate columns rather than
+one: they are settled by different halves of the pipeline, at different times,
+with different failure semantics.
 
 **Crash recovery.** Background tasks run inside the API process, so a row can be
 stranded at `pending` two ways. Both are closed:
 
 1. **Process death.** On startup, *every* `documents` and `fit_analyses` row
-   still `pending` is marked `failed`, with no age check. An in-process task
+   still `pending` — in either `status` or `extraction_status` — is marked
+   `failed`, with no age check. An in-process task
    cannot survive a restart by definition, so a row that is `pending` when the
    process boots is provably orphaned — its task died with the previous process.
    An age threshold would be actively harmful here: a row younger than the

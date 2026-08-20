@@ -45,6 +45,11 @@ packages = ["src/career_intel"]
 testpaths = ["tests"]
 addopts = "-m 'not live'"
 asyncio_mode = "auto"
+# One event loop for the whole session. asyncpg binds connections to the loop
+# that created them, so a per-test loop would leave the cached engine holding
+# connections from a loop that no longer exists.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 markers = [
     "live: hits the real OpenAI API; deselected by default",
 ]
