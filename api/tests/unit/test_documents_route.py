@@ -1,10 +1,18 @@
+import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from career_intel.config import get_settings
 from career_intel.ingest.pipeline import enrich_document
 from career_intel.models import Document
+from career_intel.models.analysis import FitAnalysis
+from tests.conftest import TEST_DATABASE_URL
 from tests.fixtures.builders import RESUME_LINES, make_imageonly_pdf, make_text_pdf
 
 PLAIN_RESUME = "\n".join(RESUME_LINES).encode()
@@ -136,6 +144,104 @@ def test_missing_document_returns_404(client: TestClient) -> None:
     missing = "00000000-0000-0000-0000-000000000000"
 
     assert client.get(f"/documents/{missing}").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# One resume at a time (spec §5: "Uploading a new resume replaces the old one")
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def _throwaway_session() -> AsyncIterator[AsyncSession]:
+    """Seeding/inspecting around ``client`` needs its own engine.
+
+    ``client`` runs the app in its own thread with its own event loop, and
+    asyncpg binds a connection to the loop that opened it -- the shared
+    ``session`` fixture's engine must not be reused across the two.
+    """
+    engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        async with factory() as db_session:
+            yield db_session
+    finally:
+        await engine.dispose()
+
+
+async def _resume_ids() -> list[uuid.UUID]:
+    async with _throwaway_session() as db_session:
+        result = await db_session.execute(select(Document.id).where(Document.kind == "resume"))
+        return list(result.scalars().all())
+
+
+async def test_pasting_a_second_resume_replaces_the_first(client: TestClient) -> None:
+    """Four different call sites each resolve "the current resume"
+    differently (newest-first, unordered ``.first()``, first-in-list). They
+    only agree because at most one resume exists -- an invariant the spec
+    states and this endpoint is what enforces."""
+    first = client.post("/documents/paste", json={"kind": "resume", "text": "old resume"}).json()
+    second = client.post("/documents/paste", json={"kind": "resume", "text": "new resume"}).json()
+
+    assert second["id"] != first["id"]
+    assert await _resume_ids() == [uuid.UUID(second["id"])]
+
+
+async def test_uploading_a_second_resume_replaces_the_first(client: TestClient) -> None:
+    first = client.post(
+        "/documents/upload",
+        files={"file": ("old.txt", PLAIN_RESUME, "text/plain")},
+        data={"kind": "resume"},
+    ).json()
+    second = client.post(
+        "/documents/upload",
+        files={"file": ("new.txt", PLAIN_RESUME, "text/plain")},
+        data={"kind": "resume"},
+    ).json()
+
+    assert await _resume_ids() == [uuid.UUID(second["id"])]
+    assert uuid.UUID(first["id"]) not in await _resume_ids()
+
+
+async def test_replacing_a_resume_cascades_its_analyses_away(client: TestClient) -> None:
+    """Spec §5: "the old ``documents`` row is deleted, analyses cascade away
+    with it". A stale ``fit_analyses`` row keyed to a deleted resume would be
+    unreachable data that the job rail could still count."""
+    resume = client.post("/documents/paste", json={"kind": "resume", "text": "old resume"}).json()
+    job = client.post("/documents/paste", json={"kind": "job", "text": JOB_TEXT}).json()
+
+    async with _throwaway_session() as db_session:
+        db_session.add(
+            FitAnalysis(
+                resume_doc_id=uuid.UUID(resume["id"]),
+                job_doc_id=uuid.UUID(job["id"]),
+                status="ready",
+                overall_score=0.5,
+                model="gpt-4o-mini",
+            )
+        )
+        await db_session.commit()
+
+    client.post("/documents/paste", json={"kind": "resume", "text": "new resume"})
+
+    async with _throwaway_session() as db_session:
+        stale = (
+            await db_session.execute(
+                select(FitAnalysis).where(FitAnalysis.resume_doc_id == uuid.UUID(resume["id"]))
+            )
+        ).scalars().all()
+    assert list(stale) == []
+
+
+async def test_adding_a_job_leaves_the_resume_and_other_jobs_alone(client: TestClient) -> None:
+    """Only resume replacement is in scope -- jobs accumulate."""
+    resume = client.post("/documents/paste", json={"kind": "resume", "text": "resume"}).json()
+    client.post("/documents/paste", json={"kind": "job", "text": JOB_TEXT, "title": "First"})
+    client.post("/documents/paste", json={"kind": "job", "text": JOB_TEXT, "title": "Second"})
+
+    listed = client.get("/documents").json()
+
+    assert [doc["id"] for doc in listed if doc["kind"] == "resume"] == [resume["id"]]
+    assert len([doc for doc in listed if doc["kind"] == "job"]) == 2
 
 
 async def test_enrichment_failure_settles_the_row_and_reraises(

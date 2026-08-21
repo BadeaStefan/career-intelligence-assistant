@@ -11,6 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from career_intel.chat.service import Citation
 from career_intel.models import (
     DocumentKind,
     FitAnalysisStatus,
@@ -84,3 +85,55 @@ class AnalysisDetail(BaseModel):
     status: FitAnalysisStatus
     overall_score: float | None
     matches: list[RequirementMatchSummary]
+
+
+class CreateSessionRequest(BaseModel):
+    job_doc_id: uuid.UUID | None = None
+
+
+class SessionSummary(BaseModel):
+    """``POST /chat/sessions``' response -- just the id the client sends
+    ``POST .../messages`` requests to next."""
+
+    id: uuid.UUID
+
+
+class SendMessageRequest(BaseModel):
+    content: str = Field(min_length=1)
+    scope: Literal["job", "all"]
+
+
+class MessageSummary(BaseModel):
+    """One row of ``GET /chat/sessions/{id}/messages``, carrying the scope
+    it was asked/answered under (spec §6: scope lives per message)."""
+
+    role: Literal["user", "assistant"]
+    content: str
+    scope: Literal["job", "all"]
+    citations: list[Citation]
+
+
+class PrepQuestionDetail(BaseModel):
+    """One row of ``GET``/``POST`` ``/prep/{job_doc_id}``'s ``questions`` list.
+
+    ``verdict`` is read off the parent ``FitAnalysis``'s matching
+    ``RequirementMatch`` -- what verdict this question is anchored to -- not
+    persisted redundantly on ``PrepQuestion`` itself (spec §4's update note,
+    same reasoning ``RequirementMatch`` already applies to its own score).
+    """
+
+    id: uuid.UUID
+    requirement_id: uuid.UUID
+    requirement_text: str
+    verdict: RequirementVerdictValue
+    question: str
+    why_they_will_ask: str
+    how_to_frame: str
+    evidence: list[EvidenceSummary]
+
+
+class PrepDetail(BaseModel):
+    """The full breakdown for ``GET``/``POST`` ``/prep/{job_doc_id}``."""
+
+    job_doc_id: uuid.UUID
+    questions: list[PrepQuestionDetail]

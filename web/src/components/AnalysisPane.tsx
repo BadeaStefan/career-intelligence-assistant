@@ -9,6 +9,10 @@ export function AnalysisPane({
   onRetryExtraction,
   onPastePosting,
   retryPending,
+  prepGenerationFailed,
+  onRetryPrep,
+  prepRetryPending,
+  prepGenerating,
 }: {
   analysis: AnalysisView;
   onRetryExtraction?: () => void;
@@ -19,15 +23,50 @@ export function AnalysisPane({
   // AnalysisView -- that type is shared, adapter-built presentation state,
   // not a place for one mutation's live in-flight flag.
   retryPending?: boolean;
+  // Same convention as retryPending, for usePrep's generate mutation: a
+  // failed POST /prep must render as a distinct state from "not analysed
+  // yet" (an empty prepQuestions array with no error), not the same
+  // "questions will appear after fit analysis" copy PrepPane shows for
+  // that -- see usePrep.ts's module docstring on why a failure alone
+  // cannot re-arm itself without an explicit retry.
+  prepGenerationFailed?: boolean;
+  onRetryPrep?: () => void;
+  prepRetryPending?: boolean;
+  // Same convention again, for the third state the prep tab can be in.
+  // "Not analysed yet" and "generating right now" are not the same thing:
+  // POST /prep 409s unless the fit analysis is already ready, so while the
+  // request is in flight PrepPane's "questions will appear after fit
+  // analysis" copy states the opposite of what is true.
+  prepGenerating?: boolean;
 }) {
   if (analysis.status === "extraction-failed") return <ExtractionFailure analysis={analysis} onRetry={onRetryExtraction} onPaste={onPastePosting} />;
   if (analysis.status === "analysis-failed") return <AnalysisFailure analysis={analysis} retryPending={retryPending} />;
   if (analysis.status === "analysing") return <AnalysingState analysis={analysis} />;
   if (analysis.status === "unavailable") return <UnavailableState analysis={analysis} />;
-  return <ReadyAnalysis analysis={analysis} />;
+  return (
+    <ReadyAnalysis
+      analysis={analysis}
+      prepGenerationFailed={prepGenerationFailed}
+      onRetryPrep={onRetryPrep}
+      prepRetryPending={prepRetryPending}
+      prepGenerating={prepGenerating}
+    />
+  );
 }
 
-function ReadyAnalysis({ analysis }: { analysis: Extract<AnalysisView, { status: "ready" }> }) {
+function ReadyAnalysis({
+  analysis,
+  prepGenerationFailed,
+  onRetryPrep,
+  prepRetryPending,
+  prepGenerating,
+}: {
+  analysis: Extract<AnalysisView, { status: "ready" }>;
+  prepGenerationFailed?: boolean;
+  onRetryPrep?: () => void;
+  prepRetryPending?: boolean;
+  prepGenerating?: boolean;
+}) {
   const [tab, setTab] = useState<"analysis" | "prep">("analysis");
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const grouped = useMemo(
@@ -62,11 +101,46 @@ function ReadyAnalysis({ analysis }: { analysis: Extract<AnalysisView, { status:
               />
             ))}
           </div>
+        ) : prepGenerationFailed ? (
+          // Checked before `prepGenerating`: a retry of a failed generation
+          // sets both at once, and a retry in flight must still read as a
+          // recovery from a failure, not as a first attempt.
+          <PrepGenerationFailure onRetry={onRetryPrep} retryPending={prepRetryPending} />
+        ) : prepGenerating ? (
+          <PrepGenerating />
         ) : (
           <PrepPane questions={analysis.prepQuestions} />
         )}
       </div>
     </section>
+  );
+}
+
+// Same shell as PrepPane's own empty state -- this replaces that state
+// rather than sitting beside it, so it should not arrive looking like a
+// different kind of surface.
+function PrepGenerating() {
+  return (
+    <div className="availability-state compact">
+      <p className="eyebrow">Interview preparation</p>
+      <h2>Generating interview questions…</h2>
+      <p>The prep service is deriving questions from this posting's finished requirement verdicts. They will appear here when it returns.</p>
+    </div>
+  );
+}
+
+function PrepGenerationFailure({ onRetry, retryPending }: { onRetry?: () => void; retryPending?: boolean }) {
+  return (
+    <div className="error-state-wrap">
+      <article className="error-panel">
+        <p className="eyebrow error-eyebrow"><span className="dot verdict-missing" />Interview prep unavailable</p>
+        <h2>Question generation failed</h2>
+        <p>Career Intelligence could not generate interview questions for this posting. This can be retried without re-running the fit analysis.</p>
+        <div className="error-actions">
+          <button type="button" className="primary-action" disabled={!onRetry || retryPending} onClick={onRetry}>Retry</button>
+        </div>
+      </article>
+    </div>
   );
 }
 

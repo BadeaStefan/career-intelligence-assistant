@@ -10,7 +10,7 @@ genuinely cannot block an upload.
 import uuid
 
 import structlog
-from sqlalchemy import case, or_, select, update
+from sqlalchemy import case, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from career_intel.analysis.engine import run_fit_analysis, schedule_fit_analyses
@@ -287,3 +287,35 @@ async def fail_orphaned_pending_rows(session: AsyncSession) -> int:
 async def list_documents(session: AsyncSession) -> list[Document]:
     result = await session.execute(select(Document).order_by(Document.created_at.desc()))
     return list(result.scalars().all())
+
+
+async def delete_existing_resumes(session: AsyncSession) -> int:
+    """Drop every resume-kind document. Does not commit.
+
+    Spec §5: "Uploading a new resume replaces the old one: the old
+    ``documents`` row is deleted, analyses cascade away with it, and every
+    pair is recomputed against the new resume." Called as part of persisting
+    a new resume, so the delete and the insert land in one transaction.
+
+    This is what makes "the current resume" a well-defined phrase. Four call
+    sites resolve it four different ways -- newest by ``created_at``, an
+    unordered ``.first()``, the first entry of a list response -- and they
+    agree only while at most one resume exists. That agreement is an
+    invariant, and non-negotiable #11 says an invariant belongs at the write
+    path, not in each reader's ORDER BY.
+
+    Plural on purpose: the invariant is what this establishes, not what it
+    assumes, so it clears any pre-existing anomaly rather than trusting there
+    to be exactly one row.
+
+    Dependent rows (``chunks``, ``evidence_units``, ``fit_analyses`` and
+    everything cascading off those) go with it via the FK ``ON DELETE
+    CASCADE`` already declared on each. Issued as one bulk DELETE rather than
+    a load-then-``session.delete()`` loop: the database does the cascading
+    either way, and loading a resume row means loading its ``raw_text``,
+    which there is no reason to pull into memory to throw away.
+    """
+    result = await session.execute(
+        delete(Document).where(Document.kind == "resume").returning(Document.id)
+    )
+    return len(result.fetchall())

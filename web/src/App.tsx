@@ -8,7 +8,9 @@ import { JobRail } from "./components/JobRail";
 import { TraceDrawer } from "./components/TraceDrawer";
 import { WorkspaceEmptyState } from "./components/WorkspaceEmptyState";
 import { shouldPollAnalysisList, useAnalysisDetail, useAnalysisList } from "./hooks/useAnalysis";
+import { useChat } from "./hooks/useChat";
 import { useDocuments } from "./hooks/useDocuments";
+import { usePrep } from "./hooks/usePrep";
 import { headingFor, toAnalysisView, toJobRailItem, withSelectedVerdictCounts } from "./view-models/analysis-adapters";
 import type { AnalysisView, JobRailItem } from "./view-models/dashboard";
 
@@ -31,8 +33,23 @@ export function App() {
   const [problem, setProblem] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string>();
   const analysisDetail = useAnalysisDetail(selectedJobId);
+  // Prep only makes sense once the fit analysis itself is "ready" (the
+  // server 409s POST /prep for anything else) -- gating usePrep's query and
+  // its auto-generate effect on that keeps a pending/failed job from ever
+  // firing a doomed POST.
+  const prep = usePrep(selectedJobId, { enabled: analysisDetail.analysis?.status === "ready" });
   const resumeInput = useRef<HTMLInputElement>(null);
   const resume = documents.find((document) => document.kind === "resume");
+  const chat = useChat(selectedJobId);
+
+  // Chat retrieval reads resume *chunks*, produced in the same background
+  // ingest pass as structured extraction (ingest/pipeline.py: chunks are
+  // committed unconditionally, even when extraction itself later fails and
+  // extraction_status settles to "failed" -- see that module's docstring on
+  // degrading to chunk-only RAG). So chat is ready once that pass has run
+  // at all, not only once it has fully succeeded: "pending" is the one
+  // status that means no chunks exist yet.
+  const chatConnected = Boolean(resume) && resume?.extraction_status !== "pending";
 
   useEffect(() => {
     if (!jobDocuments.some((document) => document.id === selectedJobId)) setSelectedJobId(jobDocuments[0]?.id);
@@ -53,7 +70,7 @@ export function App() {
   if (isLoading) return <div className="app-loading"><span className="brand-mark" />Loading workspace…</div>;
 
   const selectedDocument = jobDocuments.find((document) => document.id === selectedJobId);
-  const analysis = selectedDocument ? buildAnalysisView(selectedDocument, analysisDetail) : null;
+  const analysis = selectedDocument ? buildAnalysisView(selectedDocument, analysisDetail, prep) : null;
 
   return (
     <main className="workspace">
@@ -69,16 +86,40 @@ export function App() {
           onAddJob={() => handlePaste("job")}
         />
         <section className="center-column">
-          {!resume ? <WorkspaceEmptyState onChooseFile={() => resumeInput.current?.click()} onFile={(file) => handleUpload(file, "resume")} onPaste={() => handlePaste("resume")} /> : analysis ? <AnalysisPane analysis={analysis} onPastePosting={() => handlePaste("job")} retryPending={analysisDetail.retry.isPending} /> : <NoJobState onAddJob={() => handlePaste("job")} />}
+          {!resume ? <WorkspaceEmptyState onChooseFile={() => resumeInput.current?.click()} onFile={(file) => handleUpload(file, "resume")} onPaste={() => handlePaste("resume")} /> : analysis ? (
+            <AnalysisPane
+              analysis={analysis}
+              onPastePosting={() => handlePaste("job")}
+              retryPending={analysisDetail.retry.isPending}
+              prepGenerationFailed={prep.isGenerateError}
+              onRetryPrep={() => prep.generate.mutate()}
+              prepRetryPending={prep.generate.isPending}
+              // Both halves of "prep is on its way": the GET that decides
+              // whether anything exists yet, and the POST usePrep fires
+              // automatically once that GET confirms a 404. Either one in
+              // flight means the tab must not claim questions are waiting on
+              // a fit analysis that has, by this point, already finished.
+              prepGenerating={prep.generate.isPending || prep.isLoading}
+            />
+          ) : <NoJobState onAddJob={() => handlePaste("job")} />}
           <TraceDrawer connected={false} />
         </section>
         <ChatDock
           jobCompany={selectedDocument ? selectedDocument.company ?? selectedDocument.title ?? "this job" : undefined}
           jobCount={jobDocuments.filter((document) => document.extraction_status === "ready").length}
           requirementCount={0}
-          connected={false}
+          connected={chatConnected}
           forceAllJobs={selectedDocument?.extraction_status === "failed" || selectedDocument?.status === "failed"}
           excludedJob={selectedDocument && (selectedDocument.extraction_status === "failed" || selectedDocument.status === "failed") ? selectedDocument.company ?? selectedDocument.title ?? "Selected job" : undefined}
+          messages={chat.messages}
+          sending={chat.sendMessage.isPending}
+          onSend={(content, scope) => {
+            setProblem(null);
+            chat.sendMessage.mutate(
+              { content, scope },
+              { onError: (cause) => setProblem(messageFor(cause, "Could not send that message.")) },
+            );
+          }}
         />
       </div>
     </main>
@@ -125,12 +166,13 @@ function buildRailItem(
 function buildAnalysisView(
   document: DocumentSummary,
   analysisDetail: ReturnType<typeof useAnalysisDetail>,
+  prep: ReturnType<typeof usePrep>,
 ): AnalysisView {
   if (dependsOnAnalysisData(document) && (analysisDetail.isLoading || analysisDetail.error)) {
     return { status: "unavailable", job: headingFor(document) };
   }
 
-  return toAnalysisView(document, analysisDetail.analysis, () => analysisDetail.retry.mutate());
+  return toAnalysisView(document, analysisDetail.analysis, () => analysisDetail.retry.mutate(), prep.prep);
 }
 
 function resumeDetail(document: DocumentSummary): string {

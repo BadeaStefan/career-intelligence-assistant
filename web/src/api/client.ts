@@ -1,9 +1,14 @@
 import type {
   AnalysisDetail,
   AnalysisSummary,
+  ChatReply,
+  ChatScope,
+  ChatSessionSummary,
   DocumentKind,
   DocumentSummary,
+  MessageSummary,
   PasteInput,
+  PrepDetail,
 } from "./types";
 
 const BASE = "/api";
@@ -81,6 +86,56 @@ export const apiClient = {
   async retryAnalysis(jobDocId: string): Promise<void> {
     return unwrap<void>(
       await fetch(`${BASE}/analyses/${jobDocId}/retry`, { method: "POST" }),
+    );
+  },
+
+  // `jobDocId` is undefined for a dock with no job selected -- the session
+  // is still created (scope "all" works with no job bound), just never
+  // usable with scope "job" (the API 400s that combination -- see
+  // chat/service.py).
+  async createChatSession(jobDocId?: string): Promise<ChatSessionSummary> {
+    return unwrap<ChatSessionSummary>(
+      await fetch(`${BASE}/chat/sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_doc_id: jobDocId ?? null }),
+      }),
+    );
+  },
+
+  async sendChatMessage(
+    sessionId: string,
+    content: string,
+    scope: ChatScope,
+  ): Promise<ChatReply> {
+    return unwrap<ChatReply>(
+      await fetch(`${BASE}/chat/sessions/${sessionId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, scope }),
+      }),
+    );
+  },
+
+  async listChatMessages(sessionId: string): Promise<MessageSummary[]> {
+    return unwrap<MessageSummary[]>(
+      await fetch(`${BASE}/chat/sessions/${sessionId}/messages`),
+    );
+  },
+
+  // A 404 here is a real, expected state (no interview prep generated yet
+  // for this job) -- same "surfaces as ApiError.status === 404" contract as
+  // getAnalysis above.
+  async getPrep(jobDocId: string): Promise<PrepDetail> {
+    return unwrap<PrepDetail>(await fetch(`${BASE}/prep/${jobDocId}`));
+  },
+
+  // Generation is a POST, never a GET (spec §7): a generating GET would be
+  // non-idempotent, so callers that want "generate, or return the cached
+  // row if one already exists" must call this, not getPrep.
+  async generatePrep(jobDocId: string): Promise<PrepDetail> {
+    return unwrap<PrepDetail>(
+      await fetch(`${BASE}/prep/${jobDocId}`, { method: "POST" }),
     );
   },
 };

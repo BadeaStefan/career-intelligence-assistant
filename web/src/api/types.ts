@@ -75,3 +75,77 @@ export interface AnalysisDetail {
   overall_score: number | null;
   matches: RequirementMatchSummary[];
 }
+
+/** Chat scope, chosen by the dock's explicit toggle (spec §6). Travels per
+ * message, not per session -- every `POST .../messages` body carries it. */
+export type ChatScope = "job" | "all";
+
+/**
+ * Mirrors the API's Citation -- a chat citation already resolved to the
+ * chunk and span it points at, not the bare "[c1]" handle the model wrote
+ * (that handle is only ever meaningful for the one retrieval call that
+ * assigned it, per `chat/service.py`'s docstring).
+ */
+export interface Citation {
+  handle: string;
+  document_id: string;
+  chunk_id: string;
+  char_start: number;
+  char_end: number;
+  /**
+   * The cited excerpt itself. Carried on the citation because the API never
+   * serialises a document's `raw_text` (it is PII), so a span alone is not
+   * something a client can resolve back into words -- the same reason
+   * `EvidenceSummary` carries its quote.
+   */
+  text: string;
+}
+
+/** Mirrors the API's SessionSummary -- `POST /chat/sessions`' response. */
+export interface ChatSessionSummary {
+  id: string;
+}
+
+/** Mirrors the API's ChatReply -- `POST /chat/sessions/{id}/messages`' response. */
+export interface ChatReply {
+  content: string;
+  citations: Citation[];
+}
+
+/**
+ * Mirrors the API's MessageSummary -- one row of
+ * `GET /chat/sessions/{id}/messages`, carrying the scope it was actually
+ * asked/answered under (spec §6: scope lives per message, so history must
+ * render from this field, never from whatever the toggle currently shows).
+ */
+export interface MessageSummary {
+  role: "user" | "assistant";
+  content: string;
+  scope: ChatScope;
+  citations: Citation[];
+}
+
+/**
+ * Mirrors the API's PrepQuestionDetail. `verdict` is read off the parent
+ * fit analysis's matching requirement match, not persisted redundantly on
+ * the question itself -- what verdict this question is anchored to.
+ */
+export interface PrepQuestionDetail {
+  id: string;
+  requirement_id: string;
+  requirement_text: string;
+  verdict: RequirementVerdict;
+  question: string;
+  why_they_will_ask: string;
+  how_to_frame: string;
+  evidence: EvidenceSummary[];
+}
+
+/**
+ * Mirrors the API's PrepDetail -- the full breakdown for
+ * `GET`/`POST /prep/{job_doc_id}`.
+ */
+export interface PrepDetail {
+  job_doc_id: string;
+  questions: PrepQuestionDetail[];
+}
