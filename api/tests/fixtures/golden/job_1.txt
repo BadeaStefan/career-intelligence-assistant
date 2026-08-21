@@ -7,3 +7,4 @@ Required:
 
 Preferred:
 - Experience operating Kubernetes clusters.
+- Formal team leadership experience.

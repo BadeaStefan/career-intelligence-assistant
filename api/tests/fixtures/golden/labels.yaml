@@ -29,6 +29,11 @@
       "kind": "achievement",
       "text": "Built React operations dashboards",
       "quote": "Built an internal React dashboard for operations teams."
+    },
+    {
+      "kind": "achievement",
+      "text": "Mentored engineers",
+      "quote": "Mentored two engineers through design reviews and incident retrospectives."
     }
   ],
   "jobs": {
@@ -39,11 +44,12 @@
         {"text": "Production Python experience", "importance": "required", "category": "language"},
         {"text": "Designing distributed systems", "importance": "required", "category": "architecture"},
         {"text": "PostgreSQL performance work", "importance": "required", "category": "database"},
-        {"text": "Kubernetes operations", "importance": "preferred", "category": "platform"}
+        {"text": "Kubernetes operations", "importance": "preferred", "category": "platform"},
+        {"text": "Formal team leadership", "importance": "preferred", "category": "leadership"}
       ],
       "expected": {
         "strong": ["python", "distributed systems", "postgresql"],
-        "partial": [],
+        "partial": ["team leadership"],
         "missing": ["kubernetes"]
       }
     },

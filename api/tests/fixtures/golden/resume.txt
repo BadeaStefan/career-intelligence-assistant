@@ -9,5 +9,6 @@ Experience
 - Tuned PostgreSQL queries and reduced reporting latency by 60 percent.
 - Deployed containerised services to AWS ECS with monitored rollbacks.
 - Built an internal React dashboard for operations teams.
+- Mentored two engineers through design reviews and incident retrospectives.
 
 Alex has not used Kubernetes, Terraform, or Rust professionally.
