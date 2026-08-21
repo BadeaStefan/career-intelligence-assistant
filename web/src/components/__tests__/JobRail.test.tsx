@@ -111,4 +111,19 @@ describe("JobRail", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it("offers the add action as the rail's footer without a separate hint line", () => {
+    render(
+      <JobRail
+        resume={{ id: "resume-1", filename: "alex-moraru-resume.pdf", detail: "2 pages · 118 spans indexed" }}
+        jobs={jobs}
+        selectedJobId="nova"
+        onSelect={() => undefined}
+        onAddJob={() => undefined}
+        onDelete={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "+ Add job" })).toBeEnabled();
+    expect(screen.queryByText(/upload a file or paste text/i)).not.toBeInTheDocument();
+  });
 });

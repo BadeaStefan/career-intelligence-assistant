@@ -104,10 +104,9 @@ export function JobRail({ resume, jobs, selectedJobId, onSelect, onAddJob, onDel
       </div>
 
       <footer className="rail-footer">
-        <button type="button" className="text-action" onClick={onAddJob} disabled={!resume}>
+        <button type="button" className="rail-add" onClick={onAddJob} disabled={!resume}>
           + Add job
         </button>
-        <p className="rail-meta">Upload a file or paste text</p>
       </footer>
     </aside>
   );
