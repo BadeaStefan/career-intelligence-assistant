@@ -209,7 +209,7 @@ function ExtractionFailure({ analysis, onRetry, onPaste }: { analysis: Extract<A
           <h2>Couldn't read the requirements from this posting</h2>
           <p>The posting could not be converted into a reliable requirement list. Career Intelligence will not guess requirements or generate verdicts without source text.</p>
           {(analysis.detail || analysis.sourceUrl) && <div className="technical-detail"><p>{analysis.detail}</p><p>{analysis.sourceUrl}</p></div>}
-          <div className="error-actions"><button type="button" className="primary-action" disabled={!onRetry} onClick={onRetry}>Retry extraction</button><button type="button" className="secondary-action" disabled={!onPaste} onClick={onPaste}>Paste posting text instead</button></div>
+          <div className="error-actions"><button type="button" className="primary-action" disabled={!onRetry} onClick={onRetry}>Retry extraction</button><button type="button" className="secondary-action" disabled={!onPaste} onClick={onPaste}>Add the posting another way</button></div>
         </article>
       </div>
     </section>

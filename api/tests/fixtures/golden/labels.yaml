@@ -1,0 +1,87 @@
+{
+  "thresholds": {
+    "gap_precision": 0.8,
+    "gap_recall": 0.8,
+    "span_location_rate": 0.9
+  },
+  "resume_evidence": [
+    {
+      "kind": "skill",
+      "text": "Production Python experience",
+      "quote": "Built Python services that processed 40 million events per day."
+    },
+    {
+      "kind": "achievement",
+      "text": "Designed distributed systems",
+      "quote": "Designed distributed systems with idempotent workers and durable queues."
+    },
+    {
+      "kind": "achievement",
+      "text": "PostgreSQL performance tuning",
+      "quote": "Tuned PostgreSQL queries and reduced reporting latency by 60 percent."
+    },
+    {
+      "kind": "achievement",
+      "text": "Deployed services on AWS",
+      "quote": "Deployed containerised services to AWS ECS with monitored rollbacks."
+    },
+    {
+      "kind": "achievement",
+      "text": "Built React operations dashboards",
+      "quote": "Built an internal React dashboard for operations teams."
+    },
+    {
+      "kind": "achievement",
+      "text": "Mentored engineers",
+      "quote": "Mentored two engineers through design reviews and incident retrospectives."
+    }
+  ],
+  "jobs": {
+    "job_1": {
+      "title": "Senior Backend Engineer",
+      "company": "Northstar",
+      "requirements": [
+        {"text": "Production Python experience", "importance": "required", "category": "language"},
+        {"text": "Designing distributed systems", "importance": "required", "category": "architecture"},
+        {"text": "PostgreSQL performance work", "importance": "required", "category": "database"},
+        {"text": "Kubernetes operations", "importance": "preferred", "category": "platform"},
+        {"text": "Formal team leadership", "importance": "preferred", "category": "leadership"}
+      ],
+      "expected": {
+        "strong": ["python", "distributed systems", "postgresql"],
+        "partial": ["team leadership"],
+        "missing": ["kubernetes"]
+      }
+    },
+    "job_2": {
+      "title": "Platform Engineer",
+      "company": "Meridian",
+      "requirements": [
+        {"text": "Strong Python development", "importance": "required", "category": "language"},
+        {"text": "Production distributed systems", "importance": "required", "category": "architecture"},
+        {"text": "Kubernetes operations", "importance": "required", "category": "platform"},
+        {"text": "Terraform automation", "importance": "preferred", "category": "platform"},
+        {"text": "AWS deployments", "importance": "preferred", "category": "cloud"}
+      ],
+      "expected": {
+        "strong": ["python", "distributed systems", "aws"],
+        "partial": [],
+        "missing": ["kubernetes", "terraform"]
+      }
+    },
+    "job_3": {
+      "title": "Systems Engineer",
+      "company": "Red Kite",
+      "requirements": [
+        {"text": "Professional Rust development", "importance": "required", "category": "language"},
+        {"text": "Designing distributed systems", "importance": "required", "category": "architecture"},
+        {"text": "AWS deployments", "importance": "preferred", "category": "cloud"}
+      ],
+      "expected": {
+        "strong": ["distributed systems", "aws"],
+        "partial": [],
+        "missing": ["rust"]
+      }
+    }
+  }
+}

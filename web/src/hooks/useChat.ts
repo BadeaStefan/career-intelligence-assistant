@@ -29,9 +29,11 @@ function messagesKey(sessionId: string | undefined) {
 export function useChat(jobDocId: string | undefined) {
   const queryClient = useQueryClient();
   const [sessionId, setSessionId] = useState<string>();
+  const [requestId, setRequestId] = useState<string>();
 
   useEffect(() => {
     setSessionId(undefined);
+    setRequestId(undefined);
   }, [jobDocId]);
 
   const query = useQuery({
@@ -43,11 +45,12 @@ export function useChat(jobDocId: string | undefined) {
   const sendMessage = useMutation({
     mutationFn: async ({ content, scope }: { content: string; scope: ChatScope }) => {
       const activeSessionId = sessionId ?? (await apiClient.createChatSession(jobDocId)).id;
-      await apiClient.sendChatMessage(activeSessionId, content, scope);
-      return activeSessionId;
+      const reply = await apiClient.sendChatMessage(activeSessionId, content, scope);
+      return { activeSessionId, requestId: reply.request_id ?? undefined };
     },
-    onSuccess: (activeSessionId) => {
+    onSuccess: ({ activeSessionId, requestId: completedRequestId }) => {
       setSessionId(activeSessionId);
+      setRequestId(completedRequestId);
       // History is re-fetched from the server rather than appended locally
       // from the send response (which only carries the assistant's reply,
       // not the user's own message) -- the transcript must always render
@@ -62,5 +65,6 @@ export function useChat(jobDocId: string | undefined) {
     isLoading: query.isLoading,
     error: query.error,
     sendMessage,
+    requestId,
   };
 }

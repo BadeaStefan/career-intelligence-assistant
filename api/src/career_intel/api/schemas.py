@@ -137,3 +137,57 @@ class PrepDetail(BaseModel):
 
     job_doc_id: uuid.UUID
     questions: list[PrepQuestionDetail]
+
+
+class LlmCallTrace(BaseModel):
+    """Safe, request-scoped provider telemetry exposed to the trace drawer."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    request_id: str
+    purpose: str
+    model: str
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    latency_ms: int
+    cost_usd: float | None
+    status: Literal["succeeded", "failed"]
+    error_type: str | None
+    created_at: datetime
+
+
+class RetrievalCandidateTrace(BaseModel):
+    id: str
+    handle: str
+    score: float
+
+
+class RetrievalResultsTrace(BaseModel):
+    candidates: list[RetrievalCandidateTrace]
+
+
+class RetrievalTraceSummary(BaseModel):
+    """Retrieval metadata only: identifiers and scores, never query/document text."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    request_id: str
+    results: RetrievalResultsTrace
+    created_at: datetime
+
+
+class TraceDetail(BaseModel):
+    llm_calls: list[LlmCallTrace]
+    retrievals: list[RetrievalTraceSummary]
+
+
+class ClientConfig(BaseModel):
+    """Server-owned values the browser needs in order to describe itself.
+
+    Deliberately narrow. This payload is public, so it carries the limits the
+    UI must state and nothing else -- never credentials or connection strings.
+    """
+
+    max_upload_bytes: int

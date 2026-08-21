@@ -23,6 +23,17 @@ from career_intel.observability import request_id_var
 T = TypeVar("T", bound=BaseModel)
 
 
+class MissingCredentialsError(Exception):
+    """Raised when a real call is attempted with no API key configured.
+
+    The SDK accepts an empty key at construction and fails with a 401 on the
+    first request, from inside whichever background task needed the model and
+    with nothing naming the variable that was never set. Settings gives every
+    field a default, so a process that found no env file starts cleanly and
+    only fails there.
+    """
+
+
 def _cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -> float:
     price = MODEL_PRICE_PER_MILLION_TOKENS.get(model, {"prompt": 0.0, "completion": 0.0})
     return (prompt_tokens * price["prompt"] + completion_tokens * price["completion"]) / 1_000_000
@@ -50,6 +61,15 @@ class OpenAIClient:
         if self._raw_override is not None:
             return self._raw_override
         if self._lazy_raw is None:
+            # Checked here rather than in __init__ for the same reason the
+            # client is built here: this is the first moment credentials are
+            # actually required.
+            if not self._settings.openai_api_key:
+                raise MissingCredentialsError(
+                    "OPENAI_API_KEY is not set, so no OpenAI call can be made."
+                    " Set it in api/.env for a local venv, or in the .env that"
+                    " docker compose reads."
+                )
             self._lazy_raw = AsyncOpenAI(api_key=self._settings.openai_api_key)
         return self._lazy_raw
 

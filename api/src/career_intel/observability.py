@@ -6,6 +6,7 @@ enrichment call (no request) and a chat call (inside a request) both land in
 the same table with the right nullable value.
 """
 
+import re
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from logging import INFO
@@ -17,10 +18,11 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
+_TRACE_PATH_SAFE_REQUEST_ID = re.compile(r"[A-Za-z0-9._:-]{1,64}")
 
 
 def _request_id(inbound: str | None) -> str:
-    if inbound and len(inbound) <= 64 and inbound.isascii():
+    if inbound and _TRACE_PATH_SAFE_REQUEST_ID.fullmatch(inbound):
         return inbound
     return str(uuid4())
 

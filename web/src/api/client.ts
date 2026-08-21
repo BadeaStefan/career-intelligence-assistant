@@ -4,11 +4,14 @@ import type {
   ChatReply,
   ChatScope,
   ChatSessionSummary,
+  ClientConfig,
   DocumentKind,
   DocumentSummary,
   MessageSummary,
   PasteInput,
   PrepDetail,
+  TraceDetail,
+  TracedChatReply,
 } from "./types";
 
 const BASE = "/api";
@@ -43,6 +46,13 @@ async function unwrap<T>(response: Response): Promise<T> {
 }
 
 export const apiClient = {
+  // Server-owned limits the UI has to state. Fetched rather than hardcoded:
+  // a literal here goes stale the moment MAX_UPLOAD_BYTES changes, and shows
+  // the user a number the server will not honour.
+  async getConfig(): Promise<ClientConfig> {
+    return unwrap<ClientConfig>(await fetch(`${BASE}/config`));
+  },
+
   async uploadDocument(file: File, kind: DocumentKind): Promise<DocumentSummary> {
     const form = new FormData();
     form.append("file", file);
@@ -107,14 +117,14 @@ export const apiClient = {
     sessionId: string,
     content: string,
     scope: ChatScope,
-  ): Promise<ChatReply> {
-    return unwrap<ChatReply>(
-      await fetch(`${BASE}/chat/sessions/${sessionId}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content, scope }),
-      }),
-    );
+  ): Promise<TracedChatReply> {
+    const response = await fetch(`${BASE}/chat/sessions/${sessionId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content, scope }),
+    });
+    const reply = await unwrap<ChatReply>(response);
+    return { ...reply, request_id: response.headers.get("X-Request-ID") };
   },
 
   async listChatMessages(sessionId: string): Promise<MessageSummary[]> {
@@ -137,6 +147,10 @@ export const apiClient = {
     return unwrap<PrepDetail>(
       await fetch(`${BASE}/prep/${jobDocId}`, { method: "POST" }),
     );
+  },
+
+  async getTrace(requestId: string): Promise<TraceDetail> {
+    return unwrap<TraceDetail>(await fetch(`${BASE}/traces/${encodeURIComponent(requestId)}`));
   },
 };
 

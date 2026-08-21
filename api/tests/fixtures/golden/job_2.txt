@@ -1,0 +1,10 @@
+Platform Engineer — Meridian
+
+Required:
+- Strong Python development skills.
+- Production experience with distributed systems.
+- Hands-on Kubernetes operations.
+
+Preferred:
+- Infrastructure automation with Terraform.
+- Experience deploying services on AWS.

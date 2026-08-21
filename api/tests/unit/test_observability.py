@@ -17,4 +17,13 @@ def test_oversized_inbound_request_id_is_replaced(client):
 
     replacement = response.headers["x-request-id"]
     assert replacement != "x" * 65
+
+
+def test_request_id_that_cannot_be_used_as_a_trace_path_is_replaced(client):
+    response = client.get("/health", headers={"X-Request-ID": "team/request 42"})
+
+    replacement = response.headers["x-request-id"]
+    assert replacement != "team/request 42"
+    assert "/" not in replacement
+    assert " " not in replacement
     assert str(UUID(replacement)) == replacement

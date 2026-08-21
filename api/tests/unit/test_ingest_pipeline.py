@@ -43,8 +43,22 @@ JOB_EXTRACTION_PAYLOAD = {
 MALFORMED_PAYLOAD = {"nonsense": True}
 
 
-async def _seed_document(session: AsyncSession, *, kind: str, raw_text: str) -> Document:
-    document = Document(kind=kind, source="paste", raw_text=raw_text, status="ready")
+async def _seed_document(
+    session: AsyncSession,
+    *,
+    kind: str,
+    raw_text: str,
+    title: str | None = None,
+    company: str | None = None,
+) -> Document:
+    document = Document(
+        kind=kind,
+        source="paste",
+        raw_text=raw_text,
+        status="ready",
+        title=title,
+        company=company,
+    )
     session.add(document)
     await session.commit()
     await session.refresh(document)
@@ -103,3 +117,61 @@ async def test_job_ingest_produces_requirements(session: AsyncSession, fake_embe
     requirements = (await session.execute(select(Requirement))).scalars().all()
     assert {r.text for r in requirements} == {"5+ years Python", "Kubernetes at scale"}
     assert [r.ordinal for r in requirements] == sorted(r.ordinal for r in requirements)
+
+
+async def test_job_ingest_records_the_extracted_title_and_company(
+    session: AsyncSession, fake_embedder
+):
+    """A job pasted without metadata gets its name from extraction.
+
+    Without this the rail has nothing to render but "Untitled role", which is
+    what every job looked like while the extracted title was computed and then
+    thrown away.
+    """
+    fake_llm = FakeLLM(structured_responses=[JOB_EXTRACTION_PAYLOAD])
+    doc = await _seed_document(session, kind="job", raw_text=JOB_RAW)
+
+    await enrich_document(doc.id, llm=fake_llm, embedder=fake_embedder)
+
+    await session.refresh(doc)
+    assert doc.title == "Senior Backend Engineer"
+    assert doc.company == "Datadog"
+
+
+async def test_user_supplied_title_outranks_the_extracted_one(
+    session: AsyncSession, fake_embedder
+):
+    """What the user typed is better information than what the model inferred.
+
+    The two are written by different actors at different times, and extraction
+    lands second -- so it must fill blanks rather than overwrite.
+    """
+    fake_llm = FakeLLM(structured_responses=[JOB_EXTRACTION_PAYLOAD])
+    doc = await _seed_document(
+        session,
+        kind="job",
+        raw_text=JOB_RAW,
+        title="Backend role I actually want",
+        company="Datadog EMEA",
+    )
+
+    await enrich_document(doc.id, llm=fake_llm, embedder=fake_embedder)
+
+    await session.refresh(doc)
+    assert doc.title == "Backend role I actually want"
+    assert doc.company == "Datadog EMEA"
+
+
+async def test_resume_ingest_leaves_title_and_company_alone(
+    session: AsyncSession, fake_embedder
+):
+    """Only the job branch has a title to record; the resume branch must not
+    reach for one."""
+    fake_llm = FakeLLM(structured_responses=[RESUME_EXTRACTION_PAYLOAD])
+    doc = await _seed_document(session, kind="resume", raw_text=RAW)
+
+    await enrich_document(doc.id, llm=fake_llm, embedder=fake_embedder)
+
+    await session.refresh(doc)
+    assert doc.title is None
+    assert doc.company is None
