@@ -75,3 +75,45 @@ export interface AnalysisDetail {
   overall_score: number | null;
   matches: RequirementMatchSummary[];
 }
+
+/** Chat scope, chosen by the dock's explicit toggle (spec §6). Travels per
+ * message, not per session -- every `POST .../messages` body carries it. */
+export type ChatScope = "job" | "all";
+
+/**
+ * Mirrors the API's Citation -- a chat citation already resolved to the
+ * chunk and span it points at, not the bare "[c1]" handle the model wrote
+ * (that handle is only ever meaningful for the one retrieval call that
+ * assigned it, per `chat/service.py`'s docstring).
+ */
+export interface Citation {
+  handle: string;
+  document_id: string;
+  chunk_id: string;
+  char_start: number;
+  char_end: number;
+}
+
+/** Mirrors the API's SessionSummary -- `POST /chat/sessions`' response. */
+export interface ChatSessionSummary {
+  id: string;
+}
+
+/** Mirrors the API's ChatReply -- `POST /chat/sessions/{id}/messages`' response. */
+export interface ChatReply {
+  content: string;
+  citations: Citation[];
+}
+
+/**
+ * Mirrors the API's MessageSummary -- one row of
+ * `GET /chat/sessions/{id}/messages`, carrying the scope it was actually
+ * asked/answered under (spec §6: scope lives per message, so history must
+ * render from this field, never from whatever the toggle currently shows).
+ */
+export interface MessageSummary {
+  role: "user" | "assistant";
+  content: string;
+  scope: ChatScope;
+  citations: Citation[];
+}

@@ -8,6 +8,7 @@ import { JobRail } from "./components/JobRail";
 import { TraceDrawer } from "./components/TraceDrawer";
 import { WorkspaceEmptyState } from "./components/WorkspaceEmptyState";
 import { shouldPollAnalysisList, useAnalysisDetail, useAnalysisList } from "./hooks/useAnalysis";
+import { useChat } from "./hooks/useChat";
 import { useDocuments } from "./hooks/useDocuments";
 import { headingFor, toAnalysisView, toJobRailItem, withSelectedVerdictCounts } from "./view-models/analysis-adapters";
 import type { AnalysisView, JobRailItem } from "./view-models/dashboard";
@@ -33,6 +34,16 @@ export function App() {
   const analysisDetail = useAnalysisDetail(selectedJobId);
   const resumeInput = useRef<HTMLInputElement>(null);
   const resume = documents.find((document) => document.kind === "resume");
+  const chat = useChat(selectedJobId);
+
+  // Chat retrieval reads resume *chunks*, produced in the same background
+  // ingest pass as structured extraction (ingest/pipeline.py: chunks are
+  // committed unconditionally, even when extraction itself later fails and
+  // extraction_status settles to "failed" -- see that module's docstring on
+  // degrading to chunk-only RAG). So chat is ready once that pass has run
+  // at all, not only once it has fully succeeded: "pending" is the one
+  // status that means no chunks exist yet.
+  const chatConnected = Boolean(resume) && resume?.extraction_status !== "pending";
 
   useEffect(() => {
     if (!jobDocuments.some((document) => document.id === selectedJobId)) setSelectedJobId(jobDocuments[0]?.id);
@@ -76,9 +87,18 @@ export function App() {
           jobCompany={selectedDocument ? selectedDocument.company ?? selectedDocument.title ?? "this job" : undefined}
           jobCount={jobDocuments.filter((document) => document.extraction_status === "ready").length}
           requirementCount={0}
-          connected={false}
+          connected={chatConnected}
           forceAllJobs={selectedDocument?.extraction_status === "failed" || selectedDocument?.status === "failed"}
           excludedJob={selectedDocument && (selectedDocument.extraction_status === "failed" || selectedDocument.status === "failed") ? selectedDocument.company ?? selectedDocument.title ?? "Selected job" : undefined}
+          messages={chat.messages}
+          sending={chat.sendMessage.isPending}
+          onSend={(content, scope) => {
+            setProblem(null);
+            chat.sendMessage.mutate(
+              { content, scope },
+              { onError: (cause) => setProblem(messageFor(cause, "Could not send that message.")) },
+            );
+          }}
         />
       </div>
     </main>
