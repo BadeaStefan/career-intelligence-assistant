@@ -6,17 +6,24 @@ interface JobRailProps {
   selectedJobId?: string;
   onSelect: (jobId: string) => void;
   onAddJob: () => void;
+  onDelete: (documentId: string) => void;
+  deletingId?: string;
 }
 
 const VERDICTS: Verdict[] = ["strong", "partial", "missing"];
 
-export function JobRail({ resume, jobs, selectedJobId, onSelect, onAddJob }: JobRailProps) {
+export function JobRail({ resume, jobs, selectedJobId, onSelect, onAddJob, onDelete, deletingId }: JobRailProps) {
   return (
     <aside className="job-rail" aria-label="Resume and jobs">
       <section className="resume-block">
         <p className="eyebrow">Resume</p>
         {resume ? (
           <>
+            <DeleteButton
+              label={`Delete resume ${resume.filename}`}
+              disabled={Boolean(deletingId)}
+              onClick={() => onDelete(resume.id)}
+            />
             <p className="resume-name">{resume.filename}</p>
             <p className="rail-meta">{resume.detail}</p>
           </>
@@ -36,64 +43,82 @@ export function JobRail({ resume, jobs, selectedJobId, onSelect, onAddJob }: Job
         {jobs.map((job) => {
           const selected = job.id === selectedJobId;
           return (
-            <button
+            <div
               key={job.id}
-              type="button"
-              className={`job-row job-row-${job.state}${selected ? " is-selected" : ""}`}
-              aria-label={`${job.title} at ${job.company}`}
-              aria-current={selected ? "true" : undefined}
-              onClick={() => onSelect(job.id)}
+              className={`job-row-shell job-row-${job.state}${selected ? " is-selected" : ""}`}
             >
-              <span className="job-line">
-                <span className="job-title">{job.title}</span>
-                {job.state === "ready" && (
-                  <span className={`job-score score-${scoreBand(job.score)}`}>
-                    {Math.round(job.score * 100)}%
+              <button
+                type="button"
+                className="job-row"
+                aria-label={`${job.title} at ${job.company}`}
+                aria-current={selected ? "true" : undefined}
+                onClick={() => onSelect(job.id)}
+              >
+                <span className="job-line">
+                  <span className="job-title">{job.title}</span>
+                  {job.state === "ready" && (
+                    <span className={`job-score score-${scoreBand(job.score)}`}>
+                      {Math.round(job.score * 100)}%
+                    </span>
+                  )}
+                  {job.state === "analysing" && <span className="job-score muted">— —</span>}
+                  {job.state === "failed" && <span className="job-score score-missing">failed</span>}
+                </span>
+                <span className="job-company">{job.company}</span>
+                {job.state === "ready" && <VerdictBar counts={job.verdictCounts} />}
+                {job.state === "analysing" && (
+                  <>
+                    <span className="progress-track">
+                      <span
+                        className="progress-fill"
+                        style={{
+                          width: `${job.progress ? (job.progress.complete / job.progress.total) * 100 : 0}%`,
+                        }}
+                      />
+                    </span>
+                    <span className="progress-label">
+                      <span>
+                        Analysing
+                        {job.progress && ` · judging ${job.progress.complete}/${job.progress.total}`}
+                      </span>
+                      {job.progress?.secondsRemaining && <span>~{job.progress.secondsRemaining}s</span>}
+                    </span>
+                  </>
+                )}
+                {job.state === "failed" && (
+                  <span className="failure-meta">
+                    {job.reason === "analysis" ? "Analysis error" : "Extraction error"}
+                    {job.failedAt && ` · ${job.failedAt}`}
                   </span>
                 )}
-                {job.state === "analysing" && <span className="job-score muted">— —</span>}
-                {job.state === "failed" && <span className="job-score score-missing">failed</span>}
-              </span>
-              <span className="job-company">{job.company}</span>
-              {job.state === "ready" && <VerdictBar counts={job.verdictCounts} />}
-              {job.state === "analysing" && (
-                <>
-                  <span className="progress-track">
-                    <span
-                      className="progress-fill"
-                      style={{
-                        width: `${job.progress ? (job.progress.complete / job.progress.total) * 100 : 0}%`,
-                      }}
-                    />
-                  </span>
-                  <span className="progress-label">
-                    <span>
-                      Analysing
-                      {job.progress && ` · judging ${job.progress.complete}/${job.progress.total}`}
-                    </span>
-                    {job.progress?.secondsRemaining && <span>~{job.progress.secondsRemaining}s</span>}
-                  </span>
-                </>
-              )}
-              {job.state === "failed" && (
-                <span className="failure-meta">
-                  {job.reason === "analysis" ? "Analysis error" : "Extraction error"}
-                  {job.failedAt && ` · ${job.failedAt}`}
-                </span>
-              )}
-              {job.state === "unavailable" && <span className="failure-meta neutral">Awaiting analysis service</span>}
-            </button>
+                {job.state === "unavailable" && <span className="failure-meta neutral">Awaiting analysis service</span>}
+              </button>
+              <DeleteButton
+                label={`Delete job ${job.title} at ${job.company}`}
+                disabled={Boolean(deletingId)}
+                onClick={() => onDelete(job.id)}
+              />
+            </div>
           );
         })}
       </div>
 
       <footer className="rail-footer">
-        <button type="button" className="text-action" onClick={onAddJob} disabled={!resume}>
+        <button type="button" className="rail-add" onClick={onAddJob} disabled={!resume}>
           + Add job
         </button>
-        <p className="rail-meta">Upload a file or paste text</p>
       </footer>
     </aside>
+  );
+}
+
+function DeleteButton({ label, disabled, onClick }: { label: string; disabled: boolean; onClick: () => void }) {
+  return (
+    <button type="button" className="rail-delete" aria-label={label} title={label} disabled={disabled} onClick={onClick}>
+      <svg aria-hidden="true" viewBox="0 0 16 16" width="14" height="14">
+        <path d="M5.25 2.5h5.5M3.5 4.5h9M4.5 4.5l.55 8h5.9l.55-8M6.5 6.5v4M9.5 6.5v4" />
+      </svg>
+    </button>
   );
 }
 

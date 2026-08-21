@@ -8,7 +8,7 @@ import { ChatDock } from "./components/ChatDock";
 import { JobRail } from "./components/JobRail";
 import { TraceDrawer } from "./components/TraceDrawer";
 import { WorkspaceEmptyState } from "./components/WorkspaceEmptyState";
-import { shouldPollAnalysisList, useAnalysisDetail, useAnalysisList } from "./hooks/useAnalysis";
+import { shouldPollAnalysisList, useAnalysisDetail, useAnalysisList, useRetryFailedAnalyses } from "./hooks/useAnalysis";
 import { useChat } from "./hooks/useChat";
 import { useConfig } from "./hooks/useConfig";
 import { useDocuments } from "./hooks/useDocuments";
@@ -18,7 +18,7 @@ import { headingFor, toAnalysisView, toJobRailItem, withSelectedVerdictCounts } 
 import type { AnalysisView, JobRailItem } from "./view-models/dashboard";
 
 export function App() {
-  const { documents, isLoading, error, upload, paste, busy } = useDocuments();
+  const { documents, isLoading, error, upload, paste, remove, busy } = useDocuments();
   const { maxUploadBytes } = useConfig();
   const jobDocuments = useMemo(() => documents.filter((document) => document.kind === "job"), [documents]);
 
@@ -50,7 +50,11 @@ export function App() {
   const prep = usePrep(selectedJobId, { enabled: analysisDetail.analysis?.status === "ready" });
   const resumeInput = useRef<HTMLInputElement>(null);
   const resume = documents.find((document) => document.kind === "resume");
-  const chat = useChat(selectedJobId);
+  // A chat answer is grounded in both the selected job and the current
+  // resume. Replacing or deleting the resume must retire the local session
+  // even when the selected job itself has not changed.
+  const chat = useChat(selectedJobId, resume?.id);
+  const retryFailed = useRetryFailedAnalyses();
   const [traceOpen, setTraceOpen] = useState(false);
   const trace = useTrace(chat.requestId, traceOpen);
 
@@ -96,6 +100,38 @@ export function App() {
     );
   };
 
+  // Only rows the list endpoint itself calls "failed" -- a job whose
+  // *extraction* failed has no fit_analyses row at all, and retrying it
+  // would 404 rather than re-extract anything.
+  const failedAnalysisIds = useMemo(
+    () => analysisList.analyses.filter((entry) => entry.status === "failed").map((entry) => entry.job_doc_id),
+    [analysisList.analyses],
+  );
+
+  const handleRetryFailed = () => {
+    setProblem(null);
+    retryFailed.mutate(failedAnalysisIds, {
+      onError: (cause) => setProblem(messageFor(cause, "Could not retry the failed analyses.")),
+    });
+  };
+
+  const handleDelete = (documentId: string) => {
+    const document = documents.find((entry) => entry.id === documentId);
+    if (!document) return;
+
+    const confirmed = window.confirm(
+      document.kind === "resume"
+        ? "Delete this resume and all analyses, chat, and interview prep? Your jobs will remain."
+        : "Delete this job and its analysis, chat, and interview prep?",
+    );
+    if (!confirmed) return;
+
+    setProblem(null);
+    remove.mutate(documentId, {
+      onError: (cause) => setProblem(messageFor(cause, `Could not delete this ${document.kind}.`)),
+    });
+  };
+
   if (isLoading) return <div className="app-loading"><span className="brand-mark" />Loading workspace…</div>;
 
   const selectedDocument = jobDocuments.find((document) => document.id === selectedJobId);
@@ -113,15 +149,22 @@ export function App() {
         busy={busy}
         serverError={dialogError}
       />
-      <TopBar jobCount={jobDocuments.length} />
+      <TopBar
+        jobCount={jobDocuments.length}
+        failedCount={failedAnalysisIds.length}
+        onRetryFailed={handleRetryFailed}
+        retrying={retryFailed.isPending}
+      />
       {(problem || error) && <div role="alert" className="global-alert">{problem ?? "Could not reach the API. Is it running?"}</div>}
       <div className="workspace-body">
         <JobRail
-          resume={resume ? { filename: resume.filename ?? resume.title ?? "Pasted resume", detail: resumeDetail(resume) } : null}
+          resume={resume ? { id: resume.id, filename: resume.filename ?? resume.title ?? "Pasted resume", detail: resumeDetail(resume) } : null}
           jobs={jobDocuments.map((document) => buildRailItem(document, selectedJobId, analysisList, analysisDetail))}
           selectedJobId={selectedJobId}
           onSelect={setSelectedJobId}
           onAddJob={() => openAdd("job")}
+          onDelete={handleDelete}
+          deletingId={remove.isPending ? remove.variables : undefined}
         />
         <section className="center-column">
           {!resume ? <WorkspaceEmptyState onChooseFile={() => resumeInput.current?.click()} onFile={(file) => handleUpload(file, "resume")} onPaste={() => openAdd("resume")} maxUploadBytes={maxUploadBytes} /> : analysis ? (
@@ -171,8 +214,12 @@ export function App() {
   );
 }
 
-function TopBar({ jobCount }: { jobCount: number }) {
-  return <header className="top-bar"><div><span className="brand-mark" /><strong>Career Intelligence</strong><span className="top-meta">v0.4 · workspace</span></div><div><span>{jobCount} {jobCount === 1 ? "job" : "jobs"}</span><span className="top-divider" /><button type="button" disabled>Re-run all</button></div></header>;
+// The action is absent, not disabled, when nothing has failed: there is no
+// "re-run everything" to offer -- the API refuses to recompute an analysis
+// that succeeded -- so a permanently dimmed control would only advertise a
+// capability that does not exist.
+function TopBar({ jobCount, failedCount, onRetryFailed, retrying }: { jobCount: number; failedCount: number; onRetryFailed: () => void; retrying: boolean }) {
+  return <header className="top-bar"><div><span className="brand-mark" /><strong>Career Intelligence</strong><span className="top-meta">v0.4 · workspace</span></div><div><span>{jobCount} {jobCount === 1 ? "job" : "jobs"}</span>{failedCount > 0 && <><span className="top-divider" /><button type="button" className="top-action" disabled={retrying} onClick={onRetryFailed}>{retrying ? "Retrying…" : `Retry ${failedCount} failed`}</button></>}</div></header>;
 }
 
 function NoJobState({ onAddJob }: { onAddJob: () => void }) {

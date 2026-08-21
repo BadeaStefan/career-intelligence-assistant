@@ -111,6 +111,32 @@ describe("useChat", () => {
     expect(mockedSendMessage).toHaveBeenNthCalledWith(2, "session-2", "hello job 2", "job");
   });
 
+  it("starts a fresh session when the grounding resume changes", async () => {
+    mockedCreateSession
+      .mockResolvedValueOnce({ id: "session-1" })
+      .mockResolvedValueOnce({ id: "session-2" });
+    mockedSendMessage.mockResolvedValue({ content: "answer", citations: [], request_id: "request-1" });
+    mockedListMessages.mockResolvedValue([
+      { role: "assistant", content: "answer", scope: "job", citations: [] },
+    ]);
+
+    const { result, rerender } = renderHook(
+      ({ resumeId }: { resumeId: string }) => useChat("job-1", resumeId),
+      { wrapper: createWrapper(), initialProps: { resumeId: "resume-1" } },
+    );
+
+    result.current.sendMessage.mutate({ content: "hi", scope: "job" });
+    await waitFor(() => expect(result.current.messages).toHaveLength(1));
+
+    rerender({ resumeId: "resume-2" });
+    await waitFor(() => expect(result.current.messages).toEqual([]));
+    result.current.sendMessage.mutate({ content: "new resume", scope: "job" });
+    await waitFor(() => expect(mockedSendMessage).toHaveBeenCalledTimes(2));
+
+    expect(mockedCreateSession).toHaveBeenCalledTimes(2);
+    expect(mockedSendMessage).toHaveBeenLastCalledWith("session-2", "new resume", "job");
+  });
+
   it("exposes isPending while a send is in flight", async () => {
     mockedCreateSession.mockResolvedValue({ id: "session-1" });
     let resolveSend: (value: { content: string; citations: never[]; request_id: string }) => void = () => {};

@@ -30,6 +30,7 @@ from career_intel.ingest.parsing import (
     parse_document,
 )
 from career_intel.ingest.pipeline import (
+    delete_document_and_dependents,
     delete_existing_resumes,
     enrich_document,
     list_documents,
@@ -112,7 +113,7 @@ async def get_document(document_id: uuid.UUID, session: SessionDep) -> Document:
 async def delete_document(document_id: uuid.UUID, session: SessionDep) -> None:
     document = await _require_document(session, document_id)
 
-    await session.delete(document)
+    await delete_document_and_dependents(session, document)
     await session.commit()
 
 

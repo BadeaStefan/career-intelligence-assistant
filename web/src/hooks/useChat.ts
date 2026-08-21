@@ -26,7 +26,7 @@ function messagesKey(sessionId: string | undefined) {
  * job. This mirrors `App.tsx`'s own `useEffect`-driven reset of
  * `selectedJobId`.
  */
-export function useChat(jobDocId: string | undefined) {
+export function useChat(jobDocId: string | undefined, groundingDocumentId?: string) {
   const queryClient = useQueryClient();
   const [sessionId, setSessionId] = useState<string>();
   const [requestId, setRequestId] = useState<string>();
@@ -34,7 +34,7 @@ export function useChat(jobDocId: string | undefined) {
   useEffect(() => {
     setSessionId(undefined);
     setRequestId(undefined);
-  }, [jobDocId]);
+  }, [jobDocId, groundingDocumentId]);
 
   const query = useQuery({
     queryKey: messagesKey(sessionId),

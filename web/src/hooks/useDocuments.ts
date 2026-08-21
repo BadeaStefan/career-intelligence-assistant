@@ -33,12 +33,21 @@ export function useDocuments() {
     onSuccess: invalidate,
   });
 
+  const remove = useMutation({
+    mutationFn: (documentId: string) => apiClient.deleteDocument(documentId),
+    // A document owns analyses, prep, and chat records through cascading
+    // foreign keys. Refresh every active view after deletion so none of
+    // those dependent records remain visible from an old query cache.
+    onSuccess: () => queryClient.invalidateQueries(),
+  });
+
   return {
     documents: query.data ?? [],
     isLoading: query.isLoading,
     error: query.error,
     upload,
     paste,
+    remove,
     busy: upload.isPending || paste.isPending,
   };
 }
