@@ -9,6 +9,8 @@ import type {
   MessageSummary,
   PasteInput,
   PrepDetail,
+  TraceDetail,
+  TracedChatReply,
 } from "./types";
 
 const BASE = "/api";
@@ -107,14 +109,14 @@ export const apiClient = {
     sessionId: string,
     content: string,
     scope: ChatScope,
-  ): Promise<ChatReply> {
-    return unwrap<ChatReply>(
-      await fetch(`${BASE}/chat/sessions/${sessionId}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content, scope }),
-      }),
-    );
+  ): Promise<TracedChatReply> {
+    const response = await fetch(`${BASE}/chat/sessions/${sessionId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content, scope }),
+    });
+    const reply = await unwrap<ChatReply>(response);
+    return { ...reply, request_id: response.headers.get("X-Request-ID") };
   },
 
   async listChatMessages(sessionId: string): Promise<MessageSummary[]> {
@@ -137,6 +139,10 @@ export const apiClient = {
     return unwrap<PrepDetail>(
       await fetch(`${BASE}/prep/${jobDocId}`, { method: "POST" }),
     );
+  },
+
+  async getTrace(requestId: string): Promise<TraceDetail> {
+    return unwrap<TraceDetail>(await fetch(`${BASE}/traces/${encodeURIComponent(requestId)}`));
   },
 };
 

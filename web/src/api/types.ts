@@ -112,6 +112,11 @@ export interface ChatReply {
   citations: Citation[];
 }
 
+/** Chat response plus the correlation id echoed in the response header. */
+export interface TracedChatReply extends ChatReply {
+  request_id: string | null;
+}
+
 /**
  * Mirrors the API's MessageSummary -- one row of
  * `GET /chat/sessions/{id}/messages`, carrying the scope it was actually
@@ -148,4 +153,40 @@ export interface PrepQuestionDetail {
 export interface PrepDetail {
   job_doc_id: string;
   questions: PrepQuestionDetail[];
+}
+
+export type LlmCallStatus = "succeeded" | "failed";
+
+export interface LlmCallTrace {
+  id: string;
+  request_id: string;
+  purpose: string;
+  model: string;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  latency_ms: number;
+  cost_usd: number | null;
+  status: LlmCallStatus;
+  error_type: string | null;
+  created_at: string;
+}
+
+export interface RetrievalCandidateTrace {
+  id: string;
+  handle: string;
+  score: number;
+}
+
+export interface RetrievalTraceSummary {
+  id: string;
+  request_id: string;
+  results: {
+    candidates: RetrievalCandidateTrace[];
+  };
+  created_at: string;
+}
+
+export interface TraceDetail {
+  llm_calls: LlmCallTrace[];
+  retrievals: RetrievalTraceSummary[];
 }

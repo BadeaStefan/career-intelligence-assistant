@@ -43,9 +43,8 @@ describe("workspace supporting surfaces", () => {
   });
 
   it("opens trace details and reports backend availability honestly", async () => {
-    render(<TraceDrawer connected={false} />);
+    render(<TraceDrawer open onOpenChange={() => undefined} />);
 
-    await userEvent.click(screen.getByRole("button", { name: /how did i get this answer/i }));
-    expect(screen.getByText(/trace details will appear when the trace service is available/i)).toBeInTheDocument();
+    expect(screen.getByText(/send a chat message to inspect its trace details/i)).toBeInTheDocument();
   });
 });

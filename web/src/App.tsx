@@ -11,6 +11,7 @@ import { shouldPollAnalysisList, useAnalysisDetail, useAnalysisList } from "./ho
 import { useChat } from "./hooks/useChat";
 import { useDocuments } from "./hooks/useDocuments";
 import { usePrep } from "./hooks/usePrep";
+import { useTrace } from "./hooks/useTrace";
 import { headingFor, toAnalysisView, toJobRailItem, withSelectedVerdictCounts } from "./view-models/analysis-adapters";
 import type { AnalysisView, JobRailItem } from "./view-models/dashboard";
 
@@ -41,6 +42,8 @@ export function App() {
   const resumeInput = useRef<HTMLInputElement>(null);
   const resume = documents.find((document) => document.kind === "resume");
   const chat = useChat(selectedJobId);
+  const [traceOpen, setTraceOpen] = useState(false);
+  const trace = useTrace(chat.requestId, traceOpen);
 
   // Chat retrieval reads resume *chunks*, produced in the same background
   // ingest pass as structured extraction (ingest/pipeline.py: chunks are
@@ -102,7 +105,14 @@ export function App() {
               prepGenerating={prep.generate.isPending || prep.isLoading}
             />
           ) : <NoJobState onAddJob={() => handlePaste("job")} />}
-          <TraceDrawer connected={false} />
+          <TraceDrawer
+            open={traceOpen}
+            onOpenChange={setTraceOpen}
+            requestId={chat.requestId}
+            trace={trace.data}
+            loading={trace.isLoading && trace.fetchStatus === "fetching"}
+            error={trace.isError}
+          />
         </section>
         <ChatDock
           jobCompany={selectedDocument ? selectedDocument.company ?? selectedDocument.title ?? "this job" : undefined}

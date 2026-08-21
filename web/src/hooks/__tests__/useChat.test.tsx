@@ -44,7 +44,11 @@ afterEach(() => {
 describe("useChat", () => {
   it("creates a session lazily on the first send, scoped to the given job, then reuses it", async () => {
     mockedCreateSession.mockResolvedValue({ id: "session-1" });
-    mockedSendMessage.mockResolvedValue({ content: "answer", citations: [] });
+    mockedSendMessage.mockResolvedValue({
+      content: "answer",
+      citations: [],
+      request_id: "request-42",
+    });
     mockedListMessages.mockResolvedValue([]);
 
     const { result } = renderHook(() => useChat("job-1"), { wrapper: createWrapper() });
@@ -55,6 +59,7 @@ describe("useChat", () => {
     expect(mockedCreateSession).toHaveBeenCalledTimes(1);
     expect(mockedCreateSession).toHaveBeenCalledWith("job-1");
     expect(mockedSendMessage).toHaveBeenCalledWith("session-1", "hi", "job");
+    expect(result.current.requestId).toBe("request-42");
 
     result.current.sendMessage.mutate({ content: "and now all jobs", scope: "all" });
     await waitFor(() => expect(mockedSendMessage).toHaveBeenCalledTimes(2));
@@ -66,7 +71,7 @@ describe("useChat", () => {
 
   it("refetches message history after a send so it reflects the persisted scope", async () => {
     mockedCreateSession.mockResolvedValue({ id: "session-1" });
-    mockedSendMessage.mockResolvedValue({ content: "answer", citations: [] });
+    mockedSendMessage.mockResolvedValue({ content: "answer", citations: [], request_id: "request-1" });
     const persisted: MessageSummary[] = [
       { role: "user", content: "hi", scope: "job", citations: [] },
       { role: "assistant", content: "answer", scope: "job", citations: [] },
@@ -84,7 +89,7 @@ describe("useChat", () => {
     mockedCreateSession
       .mockResolvedValueOnce({ id: "session-1" })
       .mockResolvedValueOnce({ id: "session-2" });
-    mockedSendMessage.mockResolvedValue({ content: "answer", citations: [] });
+    mockedSendMessage.mockResolvedValue({ content: "answer", citations: [], request_id: "request-1" });
     mockedListMessages.mockResolvedValue([]);
 
     const { result, rerender } = renderHook(
@@ -108,7 +113,7 @@ describe("useChat", () => {
 
   it("exposes isPending while a send is in flight", async () => {
     mockedCreateSession.mockResolvedValue({ id: "session-1" });
-    let resolveSend: (value: { content: string; citations: never[] }) => void = () => {};
+    let resolveSend: (value: { content: string; citations: never[]; request_id: string }) => void = () => {};
     mockedSendMessage.mockReturnValue(
       new Promise((resolve) => {
         resolveSend = resolve;
@@ -122,7 +127,7 @@ describe("useChat", () => {
 
     await waitFor(() => expect(result.current.sendMessage.isPending).toBe(true));
 
-    resolveSend({ content: "answer", citations: [] });
+    resolveSend({ content: "answer", citations: [], request_id: "request-1" });
     await waitFor(() => expect(result.current.sendMessage.isPending).toBe(false));
   });
 });
