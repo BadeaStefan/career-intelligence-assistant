@@ -91,7 +91,7 @@ export function JobRail({ resume, jobs, selectedJobId, onSelect, onAddJob }: Job
         <button type="button" className="text-action" onClick={onAddJob} disabled={!resume}>
           + Add job
         </button>
-        <p className="rail-meta">Paste posting text</p>
+        <p className="rail-meta">Upload a file or paste text</p>
       </footer>
     </aside>
   );

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError } from "./api/client";
 import type { DocumentKind, DocumentSummary } from "./api/types";
+import { AddDocumentDialog } from "./components/AddDocumentDialog";
 import { AnalysisPane } from "./components/AnalysisPane";
 import { ChatDock } from "./components/ChatDock";
 import { JobRail } from "./components/JobRail";
@@ -34,6 +35,12 @@ export function App() {
   shouldPollAnalysesRef.current = shouldPollAnalysisList(jobDocuments, analysisList.analyses);
 
   const [problem, setProblem] = useState<string | null>(null);
+  // The kind currently being added, or null for "dialog closed". Two error
+  // slots, not one: a failure raised while the dialog is open belongs inside
+  // it, next to the text the user would otherwise have to retype, while
+  // everything else belongs on the global bar.
+  const [addKind, setAddKind] = useState<DocumentKind | null>(null);
+  const [dialogError, setDialogError] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string>();
   const analysisDetail = useAnalysisDetail(selectedJobId);
   // Prep only makes sense once the fit analysis itself is "ready" (the
@@ -65,11 +72,28 @@ export function App() {
     upload.mutate({ file, kind }, { onError: (cause) => setProblem(messageFor(cause, "Upload failed.")) });
   };
 
-  const handlePaste = (kind: DocumentKind) => {
-    const text = window.prompt(kind === "resume" ? "Paste your resume text" : "Paste the job posting");
-    if (!text?.trim()) return;
+  const openAdd = (kind: DocumentKind) => {
     setProblem(null);
-    paste.mutate({ kind, text }, { onError: (cause) => setProblem(messageFor(cause, "Could not save that text.")) });
+    setDialogError(null);
+    setAddKind(kind);
+  };
+
+  const handleDialogFile = (file: File) => {
+    if (!addKind) return;
+    setDialogError(null);
+    upload.mutate(
+      { file, kind: addKind },
+      { onSuccess: () => setAddKind(null), onError: (cause) => setDialogError(messageFor(cause, "Upload failed.")) },
+    );
+  };
+
+  const handleDialogText = (input: { text: string; title?: string; company?: string }) => {
+    if (!addKind) return;
+    setDialogError(null);
+    paste.mutate(
+      { kind: addKind, ...input },
+      { onSuccess: () => setAddKind(null), onError: (cause) => setDialogError(messageFor(cause, "Could not save that text.")) },
+    );
   };
 
   if (isLoading) return <div className="app-loading"><span className="brand-mark" />Loading workspace…</div>;
@@ -80,6 +104,15 @@ export function App() {
   return (
     <main className="workspace">
       <input ref={resumeInput} type="file" className="sr-only" accept=".pdf,.docx,.txt,.md" disabled={busy} onChange={(event) => { const file = event.target.files?.[0]; if (file) handleUpload(file, "resume"); event.target.value = ""; }} />
+      <AddDocumentDialog
+        kind={addKind}
+        onClose={() => setAddKind(null)}
+        onSubmitFile={handleDialogFile}
+        onSubmitText={handleDialogText}
+        maxUploadBytes={maxUploadBytes}
+        busy={busy}
+        serverError={dialogError}
+      />
       <TopBar jobCount={jobDocuments.length} />
       {(problem || error) && <div role="alert" className="global-alert">{problem ?? "Could not reach the API. Is it running?"}</div>}
       <div className="workspace-body">
@@ -88,13 +121,13 @@ export function App() {
           jobs={jobDocuments.map((document) => buildRailItem(document, selectedJobId, analysisList, analysisDetail))}
           selectedJobId={selectedJobId}
           onSelect={setSelectedJobId}
-          onAddJob={() => handlePaste("job")}
+          onAddJob={() => openAdd("job")}
         />
         <section className="center-column">
-          {!resume ? <WorkspaceEmptyState onChooseFile={() => resumeInput.current?.click()} onFile={(file) => handleUpload(file, "resume")} onPaste={() => handlePaste("resume")} maxUploadBytes={maxUploadBytes} /> : analysis ? (
+          {!resume ? <WorkspaceEmptyState onChooseFile={() => resumeInput.current?.click()} onFile={(file) => handleUpload(file, "resume")} onPaste={() => openAdd("resume")} maxUploadBytes={maxUploadBytes} /> : analysis ? (
             <AnalysisPane
               analysis={analysis}
-              onPastePosting={() => handlePaste("job")}
+              onPastePosting={() => openAdd("job")}
               retryPending={analysisDetail.retry.isPending}
               prepGenerationFailed={prep.isGenerateError}
               onRetryPrep={() => prep.generate.mutate()}
@@ -106,7 +139,7 @@ export function App() {
               // a fit analysis that has, by this point, already finished.
               prepGenerating={prep.generate.isPending || prep.isLoading}
             />
-          ) : <NoJobState onAddJob={() => handlePaste("job")} />}
+          ) : <NoJobState onAddJob={() => openAdd("job")} />}
           <TraceDrawer
             open={traceOpen}
             onOpenChange={setTraceOpen}
@@ -143,7 +176,7 @@ function TopBar({ jobCount }: { jobCount: number }) {
 }
 
 function NoJobState({ onAddJob }: { onAddJob: () => void }) {
-  return <section className="empty-state"><div className="empty-card no-job-card"><p className="eyebrow">Resume indexed</p><h1>Add the first job</h1><p>Paste a posting to extract its requirements and prepare it for fit analysis.</p><button type="button" className="primary-action" onClick={onAddJob}>Add job posting</button></div></section>;
+  return <section className="empty-state"><div className="empty-card no-job-card"><p className="eyebrow">Resume indexed</p><h1>Add the first job</h1><p>Upload a PDF or DOCX, or paste the text. Either way its requirements are extracted and prepared for fit analysis.</p><button type="button" className="primary-action" onClick={onAddJob}>Add job posting</button></div></section>;
 }
 
 // A job is only ever waiting on the analyses API once its own extraction has

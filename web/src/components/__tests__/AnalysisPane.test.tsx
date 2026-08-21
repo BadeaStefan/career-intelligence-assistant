@@ -226,7 +226,7 @@ describe("AnalysisPane", () => {
     expect(screen.getByRole("button", { name: /retry analysis/i })).toBeDisabled();
   });
 
-  it("wires a working paste-posting recovery action for a failed extraction", async () => {
+  it("wires a working re-add recovery action for a failed extraction", async () => {
     const onPaste = vi.fn();
     render(
       <AnalysisPane
@@ -238,9 +238,9 @@ describe("AnalysisPane", () => {
       />,
     );
 
-    const pasteButton = screen.getByRole("button", { name: /paste posting text/i });
-    expect(pasteButton).toBeEnabled();
-    await userEvent.click(pasteButton);
+    const addButton = screen.getByRole("button", { name: /add the posting another way/i });
+    expect(addButton).toBeEnabled();
+    await userEvent.click(addButton);
     expect(onPaste).toHaveBeenCalledTimes(1);
   });
 });
