@@ -38,3 +38,18 @@ it("encodes the request id when fetching trace details", async () => {
 
   expect(fetchMock).toHaveBeenCalledWith("/api/traces/request%20id%2F42");
 });
+
+it("reads server-owned client config", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(
+    new Response(JSON.stringify({ max_upload_bytes: 20971520 }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+
+  const config = await apiClient.getConfig();
+
+  expect(fetchMock).toHaveBeenCalledWith("/api/config");
+  expect(config.max_upload_bytes).toBe(20971520);
+});

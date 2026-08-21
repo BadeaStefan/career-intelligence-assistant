@@ -9,6 +9,7 @@ import { TraceDrawer } from "./components/TraceDrawer";
 import { WorkspaceEmptyState } from "./components/WorkspaceEmptyState";
 import { shouldPollAnalysisList, useAnalysisDetail, useAnalysisList } from "./hooks/useAnalysis";
 import { useChat } from "./hooks/useChat";
+import { useConfig } from "./hooks/useConfig";
 import { useDocuments } from "./hooks/useDocuments";
 import { usePrep } from "./hooks/usePrep";
 import { useTrace } from "./hooks/useTrace";
@@ -17,6 +18,7 @@ import type { AnalysisView, JobRailItem } from "./view-models/dashboard";
 
 export function App() {
   const { documents, isLoading, error, upload, paste, busy } = useDocuments();
+  const { maxUploadBytes } = useConfig();
   const jobDocuments = useMemo(() => documents.filter((document) => document.kind === "job"), [documents]);
 
   // useAnalysisList's own refetchInterval option needs, on this render,
@@ -89,7 +91,7 @@ export function App() {
           onAddJob={() => handlePaste("job")}
         />
         <section className="center-column">
-          {!resume ? <WorkspaceEmptyState onChooseFile={() => resumeInput.current?.click()} onFile={(file) => handleUpload(file, "resume")} onPaste={() => handlePaste("resume")} /> : analysis ? (
+          {!resume ? <WorkspaceEmptyState onChooseFile={() => resumeInput.current?.click()} onFile={(file) => handleUpload(file, "resume")} onPaste={() => handlePaste("resume")} maxUploadBytes={maxUploadBytes} /> : analysis ? (
             <AnalysisPane
               analysis={analysis}
               onPastePosting={() => handlePaste("job")}

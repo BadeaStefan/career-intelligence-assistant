@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI
 
-from career_intel.api.routes import analyses, chat, documents, prep, traces
+from career_intel.api.routes import analyses, chat, config, documents, prep, traces
 from career_intel.db import get_session_factory
 from career_intel.ingest.pipeline import fail_orphaned_pending_rows
 from career_intel.observability import RequestIdMiddleware, configure_logging
@@ -35,6 +35,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Career Intelligence Assistant", lifespan=lifespan)
     app.add_middleware(RequestIdMiddleware)
 
+    app.include_router(config.router)
     app.include_router(documents.router)
     app.include_router(analyses.router)
     app.include_router(chat.router)

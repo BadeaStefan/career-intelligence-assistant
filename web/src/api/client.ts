@@ -4,6 +4,7 @@ import type {
   ChatReply,
   ChatScope,
   ChatSessionSummary,
+  ClientConfig,
   DocumentKind,
   DocumentSummary,
   MessageSummary,
@@ -45,6 +46,13 @@ async function unwrap<T>(response: Response): Promise<T> {
 }
 
 export const apiClient = {
+  // Server-owned limits the UI has to state. Fetched rather than hardcoded:
+  // a literal here goes stale the moment MAX_UPLOAD_BYTES changes, and shows
+  // the user a number the server will not honour.
+  async getConfig(): Promise<ClientConfig> {
+    return unwrap<ClientConfig>(await fetch(`${BASE}/config`));
+  },
+
   async uploadDocument(file: File, kind: DocumentKind): Promise<DocumentSummary> {
     const form = new FormData();
     form.append("file", file);

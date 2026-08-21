@@ -181,3 +181,13 @@ class RetrievalTraceSummary(BaseModel):
 class TraceDetail(BaseModel):
     llm_calls: list[LlmCallTrace]
     retrievals: list[RetrievalTraceSummary]
+
+
+class ClientConfig(BaseModel):
+    """Server-owned values the browser needs in order to describe itself.
+
+    Deliberately narrow. This payload is public, so it carries the limits the
+    UI must state and nothing else -- never credentials or connection strings.
+    """
+
+    max_upload_bytes: int

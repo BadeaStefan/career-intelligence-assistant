@@ -8,12 +8,22 @@ import { WorkspaceEmptyState } from "../WorkspaceEmptyState";
 
 describe("workspace supporting surfaces", () => {
   it("keeps the empty state focused on indexing a resume", () => {
-    render(<WorkspaceEmptyState onChooseFile={() => undefined} onFile={() => undefined} onPaste={() => undefined} />);
+    render(<WorkspaceEmptyState onChooseFile={() => undefined} onFile={() => undefined} onPaste={() => undefined} maxUploadBytes={20 * 1024 * 1024} />);
 
     expect(screen.getByRole("heading", { name: "Start with the resume" })).toBeInTheDocument();
     expect(screen.getByText(/nothing can run until one is indexed/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /choose a file/i })).toBeInTheDocument();
-    expect(screen.getByText(/max 5 mb/i)).toBeInTheDocument();
+    expect(screen.getByText(/max 20 MB/i)).toBeInTheDocument();
+  });
+
+  // The limit is the server's to state. Until /config answers, the component
+  // has no honest value to show -- and a stale literal shown confidently is
+  // the exact failure this prop exists to remove.
+  it("omits the upload limit rather than inventing one before config arrives", () => {
+    render(<WorkspaceEmptyState onChooseFile={() => undefined} onFile={() => undefined} onPaste={() => undefined} />);
+
+    expect(screen.getByRole("heading", { name: "Start with the resume" })).toBeInTheDocument();
+    expect(screen.queryByText(/max .* MB/i)).not.toBeInTheDocument();
   });
 
   it("accepts a dropped resume file", () => {

@@ -190,3 +190,8 @@ export interface TraceDetail {
   llm_calls: LlmCallTrace[];
   retrievals: RetrievalTraceSummary[];
 }
+
+/** Server-owned values the browser cannot know on its own. */
+export interface ClientConfig {
+  max_upload_bytes: number;
+}
