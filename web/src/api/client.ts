@@ -8,6 +8,7 @@ import type {
   DocumentSummary,
   MessageSummary,
   PasteInput,
+  PrepDetail,
 } from "./types";
 
 const BASE = "/api";
@@ -119,6 +120,22 @@ export const apiClient = {
   async listChatMessages(sessionId: string): Promise<MessageSummary[]> {
     return unwrap<MessageSummary[]>(
       await fetch(`${BASE}/chat/sessions/${sessionId}/messages`),
+    );
+  },
+
+  // A 404 here is a real, expected state (no interview prep generated yet
+  // for this job) -- same "surfaces as ApiError.status === 404" contract as
+  // getAnalysis above.
+  async getPrep(jobDocId: string): Promise<PrepDetail> {
+    return unwrap<PrepDetail>(await fetch(`${BASE}/prep/${jobDocId}`));
+  },
+
+  // Generation is a POST, never a GET (spec §7): a generating GET would be
+  // non-idempotent, so callers that want "generate, or return the cached
+  // row if one already exists" must call this, not getPrep.
+  async generatePrep(jobDocId: string): Promise<PrepDetail> {
+    return unwrap<PrepDetail>(
+      await fetch(`${BASE}/prep/${jobDocId}`, { method: "POST" }),
     );
   },
 };

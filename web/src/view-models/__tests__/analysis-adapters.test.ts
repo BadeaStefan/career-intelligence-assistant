@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import type { AnalysisDetail, AnalysisSummary, DocumentSummary, RequirementMatchSummary } from "../../api/types";
+import type {
+  AnalysisDetail,
+  AnalysisSummary,
+  DocumentSummary,
+  PrepDetail,
+  PrepQuestionDetail,
+  RequirementMatchSummary,
+} from "../../api/types";
 import {
   headingFor,
   toAnalysisView,
@@ -32,6 +39,20 @@ function match(overrides: Partial<RequirementMatchSummary> = {}): RequirementMat
     verdict: "strong",
     rationale: "Six years of continuous Python across three roles.",
     evidence: [{ text: "Built ingestion pipeline in Python", char_start: 120, char_end: 156 }],
+    ...overrides,
+  };
+}
+
+function prepQuestion(overrides: Partial<PrepQuestionDetail> = {}): PrepQuestionDetail {
+  return {
+    id: "q-1",
+    requirement_id: "req-2",
+    requirement_text: "Kubernetes in production",
+    verdict: "missing",
+    question: "How would you take ownership of a service already deployed on Kubernetes?",
+    why_they_will_ask: "They will test whether you can name what you do not know.",
+    how_to_frame: "Acknowledge the gap, then transfer from on-call ownership.",
+    evidence: [],
     ...overrides,
   };
 }
@@ -131,6 +152,75 @@ describe("toAnalysisView", () => {
 
   it("falls back to unavailable when detail is unresolved (still loading / errored)", () => {
     expect(toAnalysisView(document(), undefined).status).toBe("unavailable");
+  });
+
+  it("maps prep questions into PrepQuestionView, ordinal padded and 1-indexed", () => {
+    const detail: AnalysisDetail = { job_doc_id: "job-1", status: "ready", overall_score: 0.72, matches: [] };
+    const prep: PrepDetail = {
+      job_doc_id: "job-1",
+      questions: [
+        prepQuestion({ id: "q-1" }),
+        prepQuestion({
+          id: "q-2",
+          requirement_id: "req-3",
+          requirement_text: "Distributed tracing",
+          verdict: "partial",
+          question: "Walk me through a time you diagnosed a latency regression.",
+          evidence: [{ text: "Instrumented traces with OpenTelemetry", char_start: 40, char_end: 78 }],
+        }),
+      ],
+    };
+
+    const view = toAnalysisView(document(), detail, undefined, prep);
+
+    expect(view.status).toBe("ready");
+    if (view.status !== "ready") throw new Error("expected ready");
+    expect(view.prepQuestions).toEqual([
+      {
+        id: "q-1",
+        ordinal: "01",
+        question: "How would you take ownership of a service already deployed on Kubernetes?",
+        requirement: "Kubernetes in production",
+        verdict: "missing",
+        why: "They will test whether you can name what you do not know.",
+        framing: "Acknowledge the gap, then transfer from on-call ownership.",
+        evidence: undefined,
+      },
+      {
+        id: "q-2",
+        ordinal: "02",
+        question: "Walk me through a time you diagnosed a latency regression.",
+        requirement: "Distributed tracing",
+        verdict: "partial",
+        why: "They will test whether you can name what you do not know.",
+        framing: "Acknowledge the gap, then transfer from on-call ownership.",
+        evidence: { location: "chars 40–78", quote: "Instrumented traces with OpenTelemetry" },
+      },
+    ]);
+  });
+
+  it("labels a prep question's unlocatable evidence the same way a requirement's is labelled", () => {
+    const detail: AnalysisDetail = { job_doc_id: "job-1", status: "ready", overall_score: 0.5, matches: [] };
+    const prep: PrepDetail = {
+      job_doc_id: "job-1",
+      questions: [
+        prepQuestion({ evidence: [{ text: "some resume text", char_start: null, char_end: null }] }),
+      ],
+    };
+
+    const view = toAnalysisView(document(), detail, undefined, prep);
+    if (view.status !== "ready") throw new Error("expected ready");
+    expect(view.prepQuestions[0]!.evidence?.location).toBe("location not found in resume text");
+  });
+
+  it("leaves prepQuestions empty when prep is null (no generated prep yet) or undefined (not loaded)", () => {
+    const detail: AnalysisDetail = { job_doc_id: "job-1", status: "ready", overall_score: 0.5, matches: [] };
+
+    const withNull = toAnalysisView(document(), detail, undefined, null);
+    const withUndefined = toAnalysisView(document(), detail);
+    if (withNull.status !== "ready" || withUndefined.status !== "ready") throw new Error("expected ready");
+    expect(withNull.prepQuestions).toEqual([]);
+    expect(withUndefined.prepQuestions).toEqual([]);
   });
 });
 

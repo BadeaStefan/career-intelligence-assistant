@@ -6,8 +6,22 @@
  * so these are independently unit-testable against fixtures, with no
  * TanStack Query or fetch involved.
  */
-import type { AnalysisDetail, AnalysisSummary, DocumentSummary, RequirementMatchSummary } from "../api/types";
-import type { AnalysisView, JobHeadingView, JobRailItem, RequirementView, VerdictCounts } from "./dashboard";
+import type {
+  AnalysisDetail,
+  AnalysisSummary,
+  DocumentSummary,
+  PrepDetail,
+  PrepQuestionDetail,
+  RequirementMatchSummary,
+} from "../api/types";
+import type {
+  AnalysisView,
+  JobHeadingView,
+  JobRailItem,
+  PrepQuestionView,
+  RequirementView,
+  VerdictCounts,
+} from "./dashboard";
 
 export function headingFor(document: DocumentSummary): JobHeadingView {
   return {
@@ -77,6 +91,7 @@ export function toAnalysisView(
   document: DocumentSummary,
   detail: AnalysisDetail | null | undefined,
   onRetry?: () => void,
+  prep?: PrepDetail | null,
 ): AnalysisView {
   const job = headingFor(document);
 
@@ -105,9 +120,10 @@ export function toAnalysisView(
     job,
     score: detail.overall_score ?? 0,
     requirements: detail.matches.map(toRequirementView),
-    // Interview prep (Task 20) is Phase 4 and not built yet -- PrepPane
-    // already renders a graceful empty state for this (ruling 5).
-    prepQuestions: [],
+    // `prep` is `undefined`/`null` until usePrep's GET resolves to a real
+    // row (still loading, disabled, or generation hasn't landed yet) --
+    // PrepPane already renders a graceful empty state for an empty list.
+    prepQuestions: prep ? prep.questions.map(toPrepQuestionView) : [],
   };
 }
 
@@ -129,6 +145,29 @@ function toRequirementView(match: RequirementMatchSummary): RequirementView {
     // one, the trailing clause names the count instead of silently dropping
     // the rest.
     gap: match.evidence.length > 1 ? `${match.evidence.length} spans cited` : undefined,
+  };
+}
+
+function toPrepQuestionView(question: PrepQuestionDetail, index: number): PrepQuestionView {
+  const [firstEvidence] = question.evidence;
+
+  return {
+    id: question.id,
+    // Zero-padded two-digit position within the list ("01", "02", ...) --
+    // the API doesn't persist a display label, only insertion order via
+    // `ordinal` server-side, which this array already arrives sorted by.
+    ordinal: String(index + 1).padStart(2, "0"),
+    question: question.question,
+    requirement: question.requirement_text,
+    verdict: question.verdict,
+    why: question.why_they_will_ask,
+    framing: question.how_to_frame,
+    // PrepQuestionView carries a single citation, same simplification
+    // toRequirementView already makes for RequirementView -- a question
+    // with more than one linked evidence unit shows only the first.
+    evidence: firstEvidence
+      ? { location: locationLabel(firstEvidence.char_start, firstEvidence.char_end), quote: firstEvidence.text }
+      : undefined,
   };
 }
 

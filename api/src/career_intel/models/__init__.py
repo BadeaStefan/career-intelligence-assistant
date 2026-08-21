@@ -15,6 +15,7 @@ from career_intel.models.document import (
     ProcessingStatus,
 )
 from career_intel.models.evidence import EvidenceKind, EvidenceUnit
+from career_intel.models.prep import InterviewPrep, PrepQuestion
 from career_intel.models.requirement import Requirement, RequirementImportance
 from career_intel.models.telemetry import LlmCall, LlmCallStatus, RetrievalTrace
 
@@ -32,9 +33,11 @@ __all__ = [
     "EvidenceUnit",
     "FitAnalysis",
     "FitAnalysisStatus",
+    "InterviewPrep",
     "LlmCall",
     "LlmCallStatus",
     "MatchEvidence",
+    "PrepQuestion",
     "ProcessingStatus",
     "Requirement",
     "RequirementImportance",

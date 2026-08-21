@@ -117,3 +117,28 @@ export interface MessageSummary {
   scope: ChatScope;
   citations: Citation[];
 }
+
+/**
+ * Mirrors the API's PrepQuestionDetail. `verdict` is read off the parent
+ * fit analysis's matching requirement match, not persisted redundantly on
+ * the question itself -- what verdict this question is anchored to.
+ */
+export interface PrepQuestionDetail {
+  id: string;
+  requirement_id: string;
+  requirement_text: string;
+  verdict: RequirementVerdict;
+  question: string;
+  why_they_will_ask: string;
+  how_to_frame: string;
+  evidence: EvidenceSummary[];
+}
+
+/**
+ * Mirrors the API's PrepDetail -- the full breakdown for
+ * `GET`/`POST /prep/{job_doc_id}`.
+ */
+export interface PrepDetail {
+  job_doc_id: string;
+  questions: PrepQuestionDetail[];
+}

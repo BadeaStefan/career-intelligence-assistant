@@ -10,6 +10,7 @@ import { WorkspaceEmptyState } from "./components/WorkspaceEmptyState";
 import { shouldPollAnalysisList, useAnalysisDetail, useAnalysisList } from "./hooks/useAnalysis";
 import { useChat } from "./hooks/useChat";
 import { useDocuments } from "./hooks/useDocuments";
+import { usePrep } from "./hooks/usePrep";
 import { headingFor, toAnalysisView, toJobRailItem, withSelectedVerdictCounts } from "./view-models/analysis-adapters";
 import type { AnalysisView, JobRailItem } from "./view-models/dashboard";
 
@@ -32,6 +33,11 @@ export function App() {
   const [problem, setProblem] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string>();
   const analysisDetail = useAnalysisDetail(selectedJobId);
+  // Prep only makes sense once the fit analysis itself is "ready" (the
+  // server 409s POST /prep for anything else) -- gating usePrep's query and
+  // its auto-generate effect on that keeps a pending/failed job from ever
+  // firing a doomed POST.
+  const prep = usePrep(selectedJobId, { enabled: analysisDetail.analysis?.status === "ready" });
   const resumeInput = useRef<HTMLInputElement>(null);
   const resume = documents.find((document) => document.kind === "resume");
   const chat = useChat(selectedJobId);
@@ -64,7 +70,7 @@ export function App() {
   if (isLoading) return <div className="app-loading"><span className="brand-mark" />Loading workspace…</div>;
 
   const selectedDocument = jobDocuments.find((document) => document.id === selectedJobId);
-  const analysis = selectedDocument ? buildAnalysisView(selectedDocument, analysisDetail) : null;
+  const analysis = selectedDocument ? buildAnalysisView(selectedDocument, analysisDetail, prep) : null;
 
   return (
     <main className="workspace">
@@ -145,12 +151,13 @@ function buildRailItem(
 function buildAnalysisView(
   document: DocumentSummary,
   analysisDetail: ReturnType<typeof useAnalysisDetail>,
+  prep: ReturnType<typeof usePrep>,
 ): AnalysisView {
   if (dependsOnAnalysisData(document) && (analysisDetail.isLoading || analysisDetail.error)) {
     return { status: "unavailable", job: headingFor(document) };
   }
 
-  return toAnalysisView(document, analysisDetail.analysis, () => analysisDetail.retry.mutate());
+  return toAnalysisView(document, analysisDetail.analysis, () => analysisDetail.retry.mutate(), prep.prep);
 }
 
 function resumeDetail(document: DocumentSummary): string {

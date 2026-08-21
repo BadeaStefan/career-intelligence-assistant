@@ -111,3 +111,29 @@ class MessageSummary(BaseModel):
     content: str
     scope: Literal["job", "all"]
     citations: list[Citation]
+
+
+class PrepQuestionDetail(BaseModel):
+    """One row of ``GET``/``POST`` ``/prep/{job_doc_id}``'s ``questions`` list.
+
+    ``verdict`` is read off the parent ``FitAnalysis``'s matching
+    ``RequirementMatch`` -- what verdict this question is anchored to -- not
+    persisted redundantly on ``PrepQuestion`` itself (spec §4's update note,
+    same reasoning ``RequirementMatch`` already applies to its own score).
+    """
+
+    id: uuid.UUID
+    requirement_id: uuid.UUID
+    requirement_text: str
+    verdict: RequirementVerdictValue
+    question: str
+    why_they_will_ask: str
+    how_to_frame: str
+    evidence: list[EvidenceSummary]
+
+
+class PrepDetail(BaseModel):
+    """The full breakdown for ``GET``/``POST`` ``/prep/{job_doc_id}``."""
+
+    job_doc_id: uuid.UUID
+    questions: list[PrepQuestionDetail]
