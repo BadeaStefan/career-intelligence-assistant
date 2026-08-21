@@ -18,7 +18,7 @@ import { headingFor, toAnalysisView, toJobRailItem, withSelectedVerdictCounts } 
 import type { AnalysisView, JobRailItem } from "./view-models/dashboard";
 
 export function App() {
-  const { documents, isLoading, error, upload, paste, busy } = useDocuments();
+  const { documents, isLoading, error, upload, paste, remove, busy } = useDocuments();
   const { maxUploadBytes } = useConfig();
   const jobDocuments = useMemo(() => documents.filter((document) => document.kind === "job"), [documents]);
 
@@ -50,7 +50,10 @@ export function App() {
   const prep = usePrep(selectedJobId, { enabled: analysisDetail.analysis?.status === "ready" });
   const resumeInput = useRef<HTMLInputElement>(null);
   const resume = documents.find((document) => document.kind === "resume");
-  const chat = useChat(selectedJobId);
+  // A chat answer is grounded in both the selected job and the current
+  // resume. Replacing or deleting the resume must retire the local session
+  // even when the selected job itself has not changed.
+  const chat = useChat(selectedJobId, resume?.id);
   const [traceOpen, setTraceOpen] = useState(false);
   const trace = useTrace(chat.requestId, traceOpen);
 
@@ -96,6 +99,23 @@ export function App() {
     );
   };
 
+  const handleDelete = (documentId: string) => {
+    const document = documents.find((entry) => entry.id === documentId);
+    if (!document) return;
+
+    const confirmed = window.confirm(
+      document.kind === "resume"
+        ? "Delete this resume and all analyses, chat, and interview prep? Your jobs will remain."
+        : "Delete this job and its analysis, chat, and interview prep?",
+    );
+    if (!confirmed) return;
+
+    setProblem(null);
+    remove.mutate(documentId, {
+      onError: (cause) => setProblem(messageFor(cause, `Could not delete this ${document.kind}.`)),
+    });
+  };
+
   if (isLoading) return <div className="app-loading"><span className="brand-mark" />Loading workspace…</div>;
 
   const selectedDocument = jobDocuments.find((document) => document.id === selectedJobId);
@@ -117,11 +137,13 @@ export function App() {
       {(problem || error) && <div role="alert" className="global-alert">{problem ?? "Could not reach the API. Is it running?"}</div>}
       <div className="workspace-body">
         <JobRail
-          resume={resume ? { filename: resume.filename ?? resume.title ?? "Pasted resume", detail: resumeDetail(resume) } : null}
+          resume={resume ? { id: resume.id, filename: resume.filename ?? resume.title ?? "Pasted resume", detail: resumeDetail(resume) } : null}
           jobs={jobDocuments.map((document) => buildRailItem(document, selectedJobId, analysisList, analysisDetail))}
           selectedJobId={selectedJobId}
           onSelect={setSelectedJobId}
           onAddJob={() => openAdd("job")}
+          onDelete={handleDelete}
+          deletingId={remove.isPending ? remove.variables : undefined}
         />
         <section className="center-column">
           {!resume ? <WorkspaceEmptyState onChooseFile={() => resumeInput.current?.click()} onFile={(file) => handleUpload(file, "resume")} onPaste={() => openAdd("resume")} maxUploadBytes={maxUploadBytes} /> : analysis ? (

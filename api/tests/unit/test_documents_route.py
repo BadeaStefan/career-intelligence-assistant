@@ -140,6 +140,17 @@ def test_deletes_a_document(client: TestClient) -> None:
     assert client.get(f"/documents/{created['id']}").status_code == 404
 
 
+def test_deleting_the_resume_removes_chat_grounded_in_it(client: TestClient) -> None:
+    resume = client.post(
+        "/documents/paste", json={"kind": "resume", "text": "Python engineer"}
+    ).json()
+    job = client.post("/documents/paste", json={"kind": "job", "text": JOB_TEXT}).json()
+    chat_session = client.post("/chat/sessions", json={"job_doc_id": job["id"]}).json()
+
+    assert client.delete(f"/documents/{resume['id']}").status_code == 204
+    assert client.get(f"/chat/sessions/{chat_session['id']}/messages").status_code == 404
+
+
 def test_missing_document_returns_404(client: TestClient) -> None:
     missing = "00000000-0000-0000-0000-000000000000"
 
@@ -184,6 +195,16 @@ async def test_pasting_a_second_resume_replaces_the_first(client: TestClient) ->
 
     assert second["id"] != first["id"]
     assert await _resume_ids() == [uuid.UUID(second["id"])]
+
+
+def test_replacing_the_resume_removes_chat_grounded_in_the_old_one(client: TestClient) -> None:
+    client.post("/documents/paste", json={"kind": "resume", "text": "old resume"})
+    job = client.post("/documents/paste", json={"kind": "job", "text": JOB_TEXT}).json()
+    chat_session = client.post("/chat/sessions", json={"job_doc_id": job["id"]}).json()
+
+    client.post("/documents/paste", json={"kind": "resume", "text": "new resume"})
+
+    assert client.get(f"/chat/sessions/{chat_session['id']}/messages").status_code == 404
 
 
 async def test_uploading_a_second_resume_replaces_the_first(client: TestClient) -> None:

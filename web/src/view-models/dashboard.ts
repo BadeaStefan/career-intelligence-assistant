@@ -1,6 +1,7 @@
 export type Verdict = "strong" | "partial" | "missing";
 
 export interface ResumeRailItem {
+  id: string;
   filename: string;
   detail: string;
 }

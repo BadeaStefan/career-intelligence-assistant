@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Only the network boundary is faked, matching the hook tests: the real
 // App, the real hooks and real TanStack Query all run.
@@ -15,6 +15,7 @@ vi.mock("../api/client", async () => {
       listDocuments: vi.fn(),
       uploadDocument: vi.fn(),
       pasteDocument: vi.fn(),
+      deleteDocument: vi.fn(),
       listAnalyses: vi.fn(),
       getAnalysis: vi.fn(),
       retryAnalysis: vi.fn(),
@@ -63,6 +64,7 @@ function renderApp() {
 const addedJob: DocumentSummary = { ...resume, id: "job-1", kind: "job", source: "paste", filename: null };
 
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.mocked(apiClient.getConfig).mockResolvedValue({ max_upload_bytes: 5 * 1024 * 1024 });
   vi.mocked(apiClient.listDocuments).mockResolvedValue([resume]);
   vi.mocked(apiClient.listAnalyses).mockResolvedValue([]);
@@ -70,7 +72,11 @@ beforeEach(() => {
   vi.mocked(apiClient.listChatMessages).mockResolvedValue([]);
   vi.mocked(apiClient.pasteDocument).mockResolvedValue(addedJob);
   vi.mocked(apiClient.uploadDocument).mockResolvedValue(addedJob);
+  vi.mocked(apiClient.deleteDocument).mockResolvedValue();
+  vi.mocked(apiClient.getAnalysis).mockRejectedValue(new ApiError("No fit analysis for this job.", 404));
 });
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("adding a job", () => {
   // The regression this change exists to prevent. A native prompt cannot show
@@ -131,5 +137,40 @@ describe("adding a job", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/exceeds the maximum/i);
     expect(screen.getByLabelText(/posting text/i)).toHaveValue("far too much text");
+  });
+});
+
+describe("deleting documents", () => {
+  it("confirms and deletes a job from its rail action", async () => {
+    vi.mocked(apiClient.listDocuments).mockResolvedValue([resume, addedJob]);
+    const confirm = vi.fn().mockReturnValue(true);
+    vi.stubGlobal("confirm", confirm);
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Delete job Untitled role at Company not specified" }));
+
+    expect(confirm).toHaveBeenCalledWith("Delete this job and its analysis, chat, and interview prep?");
+    await waitFor(() => expect(apiClient.deleteDocument).toHaveBeenCalledWith("job-1"));
+  });
+
+  it("keeps a resume when deletion is not confirmed", async () => {
+    const confirm = vi.fn().mockReturnValue(false);
+    vi.stubGlobal("confirm", confirm);
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Delete resume cv.pdf" }));
+
+    expect(apiClient.deleteDocument).not.toHaveBeenCalled();
+  });
+
+  it("reports a deletion failure without removing the document", async () => {
+    vi.mocked(apiClient.deleteDocument).mockRejectedValue(new ApiError("Document could not be deleted.", 500));
+    vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Delete resume cv.pdf" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Document could not be deleted.");
+    expect(screen.getByText("cv.pdf")).toBeInTheDocument();
   });
 });

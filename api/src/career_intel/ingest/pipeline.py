@@ -22,7 +22,7 @@ from career_intel.ingest.locate import locate_quote
 from career_intel.ingest.schemas import ExtractedEvidence, ExtractedRequirement
 from career_intel.llm.openai_client import OpenAIClient
 from career_intel.llm.protocol import Embedder, LLMClient
-from career_intel.models import Chunk, Document, EvidenceUnit, Requirement
+from career_intel.models import ChatSession, Chunk, Document, EvidenceUnit, Requirement
 from career_intel.models.analysis import FitAnalysis
 
 logger = structlog.get_logger(__name__)
@@ -303,6 +303,21 @@ async def list_documents(session: AsyncSession) -> list[Document]:
     return list(result.scalars().all())
 
 
+async def delete_document_and_dependents(session: AsyncSession, document: Document) -> None:
+    """Delete one document plus workspace data not linked by its own FK.
+
+    Jobs own their chat sessions directly, so the database cascades those.
+    Chat sessions do not point at the resume even though every answer can be
+    grounded in it; removing the single workspace resume therefore makes all
+    existing sessions stale and requires an explicit workspace-wide cleanup.
+    Does not commit.
+    """
+    if document.kind == "resume":
+        await session.execute(delete(ChatSession))
+
+    await session.delete(document)
+
+
 async def delete_existing_resumes(session: AsyncSession) -> int:
     """Drop every resume-kind document. Does not commit.
 
@@ -332,4 +347,9 @@ async def delete_existing_resumes(session: AsyncSession) -> int:
     result = await session.execute(
         delete(Document).where(Document.kind == "resume").returning(Document.id)
     )
-    return len(result.fetchall())
+    deleted = len(result.fetchall())
+    if deleted:
+        # A replacement changes the grounding corpus just as surely as an
+        # explicit resume deletion, so old chat sessions cannot be reused.
+        await session.execute(delete(ChatSession))
+    return deleted

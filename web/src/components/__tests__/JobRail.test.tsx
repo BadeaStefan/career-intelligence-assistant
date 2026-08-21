@@ -35,32 +35,34 @@ describe("JobRail", () => {
     const onSelect = vi.fn();
     render(
       <JobRail
-        resume={{ filename: "alex-moraru-resume.pdf", detail: "2 pages · 118 spans indexed" }}
+        resume={{ id: "resume-1", filename: "alex-moraru-resume.pdf", detail: "2 pages · 118 spans indexed" }}
         jobs={jobs}
         selectedJobId="nova"
         onSelect={onSelect}
         onAddJob={() => undefined}
+        onDelete={() => undefined}
       />,
     );
 
     expect(screen.getByText("Analysing · judging 5/12")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /backend engineer at nova fintech/i })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /^backend engineer at nova fintech$/i })).toHaveAttribute(
       "aria-current",
       "true",
     );
 
-    await userEvent.click(screen.getByRole("button", { name: /platform engineer at snyk/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^platform engineer at snyk$/i }));
     expect(onSelect).toHaveBeenCalledWith("snyk");
   });
 
   it("labels extraction failures without inventing a score", () => {
     render(
       <JobRail
-        resume={{ filename: "alex-moraru-resume.pdf", detail: "2 pages · 118 spans indexed" }}
+        resume={{ id: "resume-1", filename: "alex-moraru-resume.pdf", detail: "2 pages · 118 spans indexed" }}
         jobs={jobs}
         selectedJobId="snyk"
         onSelect={() => undefined}
         onAddJob={() => undefined}
+        onDelete={() => undefined}
       />,
     );
 
@@ -74,15 +76,39 @@ describe("JobRail", () => {
     ];
     render(
       <JobRail
-        resume={{ filename: "alex-moraru-resume.pdf", detail: "2 pages · 118 spans indexed" }}
+        resume={{ id: "resume-1", filename: "alex-moraru-resume.pdf", detail: "2 pages · 118 spans indexed" }}
         jobs={analysisFailedJobs}
         selectedJobId="nova"
         onSelect={() => undefined}
         onAddJob={() => undefined}
+        onDelete={() => undefined}
       />,
     );
 
     expect(screen.getByText("Analysis error · 10:04")).toBeInTheDocument();
     expect(screen.queryByText(/extraction error/i)).not.toBeInTheDocument();
   });
+
+  it("deletes the resume or a job without selecting the job underneath", async () => {
+    const onDelete = vi.fn();
+    const onSelect = vi.fn();
+    render(
+      <JobRail
+        resume={{ id: "resume-1", filename: "alex-moraru-resume.pdf", detail: "2 pages · 118 spans indexed" }}
+        jobs={jobs}
+        selectedJobId="nova"
+        onSelect={onSelect}
+        onAddJob={() => undefined}
+        onDelete={onDelete}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete resume alex-moraru-resume.pdf" }));
+    expect(onDelete).toHaveBeenCalledWith("resume-1");
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete job Backend Engineer at Nova Fintech" }));
+    expect(onDelete).toHaveBeenLastCalledWith("nova");
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
 });
