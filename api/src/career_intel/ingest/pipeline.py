@@ -10,7 +10,7 @@ genuinely cannot block an upload.
 import uuid
 
 import structlog
-from sqlalchemy import case, delete, or_, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from career_intel.analysis.engine import run_fit_analysis, schedule_fit_analyses
@@ -91,6 +91,8 @@ async def _run_enrichment(
     evidence_items: list[ExtractedEvidence] = []
     requirement_items: list[ExtractedRequirement] = []
     extraction_status = "failed"
+    extracted_title: str | None = None
+    extracted_company: str | None = None
 
     if kind == "resume":
         resume_extraction = await extract_resume(llm, raw_text)
@@ -102,6 +104,8 @@ async def _run_enrichment(
         if job_extraction is not None:
             extraction_status = "ready"
             requirement_items = job_extraction.requirements
+            extracted_title = job_extraction.title
+            extracted_company = job_extraction.company
 
     texts = (
         [chunk.text for chunk in chunks]
@@ -158,7 +162,17 @@ async def _run_enrichment(
         await session.execute(
             update(Document)
             .where(Document.id == document_id)
-            .values(extraction_status=extraction_status)
+            .values(
+                extraction_status=extraction_status,
+                # coalesce, not assignment: the row may already carry a title
+                # the user typed when adding the posting, and that is better
+                # information than the model's reading of the same text. This
+                # write lands second, so it must fill blanks rather than
+                # replace. Both are NULL for a resume, where the job branch
+                # never ran and there is nothing to record.
+                title=func.coalesce(Document.title, extracted_title),
+                company=func.coalesce(Document.company, extracted_company),
+            )
         )
         await session.commit()
 
