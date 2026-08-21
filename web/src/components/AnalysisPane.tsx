@@ -9,6 +9,9 @@ export function AnalysisPane({
   onRetryExtraction,
   onPastePosting,
   retryPending,
+  prepGenerationFailed,
+  onRetryPrep,
+  prepRetryPending,
 }: {
   analysis: AnalysisView;
   onRetryExtraction?: () => void;
@@ -19,15 +22,41 @@ export function AnalysisPane({
   // AnalysisView -- that type is shared, adapter-built presentation state,
   // not a place for one mutation's live in-flight flag.
   retryPending?: boolean;
+  // Same convention as retryPending, for usePrep's generate mutation: a
+  // failed POST /prep must render as a distinct state from "not analysed
+  // yet" (an empty prepQuestions array with no error), not the same
+  // "questions will appear after fit analysis" copy PrepPane shows for
+  // that -- see usePrep.ts's module docstring on why a failure alone
+  // cannot re-arm itself without an explicit retry.
+  prepGenerationFailed?: boolean;
+  onRetryPrep?: () => void;
+  prepRetryPending?: boolean;
 }) {
   if (analysis.status === "extraction-failed") return <ExtractionFailure analysis={analysis} onRetry={onRetryExtraction} onPaste={onPastePosting} />;
   if (analysis.status === "analysis-failed") return <AnalysisFailure analysis={analysis} retryPending={retryPending} />;
   if (analysis.status === "analysing") return <AnalysingState analysis={analysis} />;
   if (analysis.status === "unavailable") return <UnavailableState analysis={analysis} />;
-  return <ReadyAnalysis analysis={analysis} />;
+  return (
+    <ReadyAnalysis
+      analysis={analysis}
+      prepGenerationFailed={prepGenerationFailed}
+      onRetryPrep={onRetryPrep}
+      prepRetryPending={prepRetryPending}
+    />
+  );
 }
 
-function ReadyAnalysis({ analysis }: { analysis: Extract<AnalysisView, { status: "ready" }> }) {
+function ReadyAnalysis({
+  analysis,
+  prepGenerationFailed,
+  onRetryPrep,
+  prepRetryPending,
+}: {
+  analysis: Extract<AnalysisView, { status: "ready" }>;
+  prepGenerationFailed?: boolean;
+  onRetryPrep?: () => void;
+  prepRetryPending?: boolean;
+}) {
   const [tab, setTab] = useState<"analysis" | "prep">("analysis");
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const grouped = useMemo(
@@ -62,11 +91,28 @@ function ReadyAnalysis({ analysis }: { analysis: Extract<AnalysisView, { status:
               />
             ))}
           </div>
+        ) : prepGenerationFailed ? (
+          <PrepGenerationFailure onRetry={onRetryPrep} retryPending={prepRetryPending} />
         ) : (
           <PrepPane questions={analysis.prepQuestions} />
         )}
       </div>
     </section>
+  );
+}
+
+function PrepGenerationFailure({ onRetry, retryPending }: { onRetry?: () => void; retryPending?: boolean }) {
+  return (
+    <div className="error-state-wrap">
+      <article className="error-panel">
+        <p className="eyebrow error-eyebrow"><span className="dot verdict-missing" />Interview prep unavailable</p>
+        <h2>Question generation failed</h2>
+        <p>Career Intelligence could not generate interview questions for this posting. This can be retried without re-running the fit analysis.</p>
+        <div className="error-actions">
+          <button type="button" className="primary-action" disabled={!onRetry || retryPending} onClick={onRetry}>Retry</button>
+        </div>
+      </article>
+    </div>
   );
 }
 

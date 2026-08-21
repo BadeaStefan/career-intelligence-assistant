@@ -108,6 +108,38 @@ describe("AnalysisPane", () => {
     expect(screen.getByText(/^anchored to$/i)).toBeInTheDocument();
   });
 
+  it("renders a distinct failed state for the prep tab when generation errored, with a working retry", async () => {
+    const onRetryPrep = vi.fn();
+    render(<AnalysisPane analysis={analysis} prepGenerationFailed onRetryPrep={onRetryPrep} />);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Interview Prep" }));
+
+    // Distinct from PrepPane's own "not analysed yet" empty-state copy.
+    expect(screen.getByRole("heading", { name: /question generation failed/i })).toBeInTheDocument();
+    expect(screen.queryByText(/how would you take ownership/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/questions will appear after fit analysis/i)).not.toBeInTheDocument();
+
+    const retryButton = screen.getByRole("button", { name: /retry/i });
+    expect(retryButton).toBeEnabled();
+    await userEvent.click(retryButton);
+    expect(onRetryPrep).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables the retry-prep button while a prep retry is already in flight", async () => {
+    render(<AnalysisPane analysis={analysis} prepGenerationFailed onRetryPrep={vi.fn()} prepRetryPending />);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Interview Prep" }));
+    expect(screen.getByRole("button", { name: /retry/i })).toBeDisabled();
+  });
+
+  it("renders the normal prep questions when generation has not failed", async () => {
+    render(<AnalysisPane analysis={analysis} prepGenerationFailed={false} />);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Interview Prep" }));
+    expect(screen.getByText(/how would you take ownership/i)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /question generation failed/i })).not.toBeInTheDocument();
+  });
+
   it("renders a failed extraction with recovery actions", () => {
     render(
       <AnalysisPane

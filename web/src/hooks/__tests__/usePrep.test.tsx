@@ -133,6 +133,43 @@ describe("usePrep", () => {
     expect(mockedGeneratePrep).not.toHaveBeenCalled();
   });
 
+  it("surfaces a failed generation distinctly from 'not analysed yet' (both leave prep null)", async () => {
+    mockedGetPrep.mockRejectedValue(new ApiError("not found", 404));
+    mockedGeneratePrep.mockRejectedValue(new ApiError("LLM call failed", 500));
+
+    const { result } = renderHook(() => usePrep("job-1", { enabled: true }), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isGenerateError).toBe(true));
+    // prep stays null either way (no row was ever persisted) -- the two
+    // states are told apart by isGenerateError/generateError, not by prep.
+    expect(result.current.prep).toBeNull();
+    expect(result.current.generateError).not.toBeNull();
+    expect(result.current.generate.isError).toBe(true);
+  });
+
+  it("allows an explicit retry after a failed generation, which succeeds and clears the error", async () => {
+    mockedGetPrep.mockRejectedValue(new ApiError("not found", 404));
+    mockedGeneratePrep.mockRejectedValueOnce(new ApiError("LLM call failed", 500));
+    mockedGeneratePrep.mockResolvedValueOnce(prepDetail);
+
+    const { result } = renderHook(() => usePrep("job-1", { enabled: true }), {
+      wrapper: createWrapper(),
+    });
+
+    // The auto-trigger effect fires the first (failing) attempt.
+    await waitFor(() => expect(result.current.isGenerateError).toBe(true));
+    expect(mockedGeneratePrep).toHaveBeenCalledTimes(1);
+
+    // A caller (e.g. a "Retry" button) retries explicitly via generate.mutate().
+    result.current.generate.mutate();
+
+    await waitFor(() => expect(result.current.prep).toEqual(prepDetail));
+    expect(result.current.isGenerateError).toBe(false);
+    expect(mockedGeneratePrep).toHaveBeenCalledTimes(2);
+  });
+
   it("triggers a fresh generation for a newly selected job that has no cached prep", async () => {
     mockedGetPrep.mockRejectedValue(new ApiError("not found", 404));
     mockedGeneratePrep.mockResolvedValue(prepDetail);

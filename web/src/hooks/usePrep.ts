@@ -28,6 +28,15 @@ function prepKey(jobDocId: string | undefined) {
  * makes a second open -- a re-render, or a re-selection of the same job
  * once the GET has come back with real data instead of `null` -- issue no
  * POST: the ref only re-arms when `jobDocId` itself changes.
+ *
+ * A failed generation resets `triggeredForJobRef` in `onError` -- a failed
+ * POST must not permanently block every future attempt for this job the
+ * way a *successful* one intentionally does (`query.data` stays `null`
+ * after a failure, since no row was ever persisted, so nothing else would
+ * ever re-arm the ref on its own). `generate.error`/`generate.isError` are
+ * returned alongside `generate` itself so a caller can render a state
+ * distinct from "not analysed yet" and offer an explicit retry via
+ * `generate.mutate()`.
  */
 export function usePrep(jobDocId: string | undefined, options: { enabled: boolean }) {
   const { enabled } = options;
@@ -52,6 +61,12 @@ export function usePrep(jobDocId: string | undefined, options: { enabled: boolea
     onSuccess: (detail) => {
       queryClient.setQueryData(prepKey(jobDocId), detail);
     },
+    // A failed POST must not permanently block every future attempt for
+    // this job -- unlike a success, it leaves query.data at null (no row
+    // was ever persisted), so nothing else would ever re-arm the ref.
+    onError: () => {
+      if (triggeredForJobRef.current === jobDocId) triggeredForJobRef.current = undefined;
+    },
   });
 
   const generateMutate = generate.mutate;
@@ -71,6 +86,13 @@ export function usePrep(jobDocId: string | undefined, options: { enabled: boolea
     prep: query.data,
     isLoading: query.isLoading,
     error: query.error,
+    // Flattened alongside the full `generate` mutation object (which
+    // already carries these) so a caller doesn't have to know to look
+    // inside it: a failed generation is a distinct, tellable-apart state
+    // from "not analysed yet" (query.data === null with no error), and
+    // `generate.mutate()` (via `generate` itself) is how a caller retries.
+    generateError: generate.error,
+    isGenerateError: generate.isError,
     generate,
   };
 }

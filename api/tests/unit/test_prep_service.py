@@ -8,13 +8,15 @@ beyond the ``session`` fixture in conftest.py.
 
 from typing import Any
 
+import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from career_intel.constants import EMBEDDING_DIM
 from career_intel.llm.fakes import FakeLLM
-from career_intel.models import Document, EvidenceUnit, Requirement
+from career_intel.models import Document, EvidenceUnit, InterviewPrep, PrepQuestion, Requirement
 from career_intel.models.analysis import FitAnalysis, MatchEvidence, RequirementMatch
 from career_intel.prep.service import generate_prep, get_or_generate_prep
 
@@ -299,3 +301,50 @@ async def test_second_generate_call_returns_cached_row_without_second_llm_call(
 
     assert second.id == first.id
     assert fake_llm.call_count == 1
+
+
+async def test_duplicate_ordinal_for_the_same_prep_violates_the_unique_constraint(
+    session: AsyncSession,
+) -> None:
+    """No write path today inserts a second batch of PrepQuestion rows for
+    one InterviewPrep, so this is latent -- but the ordinal column exists
+    specifically so display order is reliable (models/prep.py's docstring),
+    and that reliability must be a DB constraint, not just one
+    enumerate(..., start=1) call in generate_prep: a future write path that
+    touches this table twice (a "regenerate" feature, a retry that
+    re-inserts) must fail loudly on a duplicate ordinal rather than silently
+    leaving two rows tied on display order."""
+    analysis, requirements, _evidence_units = await _seed_ready_analysis(
+        session, requirement_count=1
+    )
+    prep = InterviewPrep(fit_analysis_id=analysis.id, model="gpt-4o-mini")
+    session.add(prep)
+    await session.flush()
+
+    session.add(
+        PrepQuestion(
+            interview_prep_id=prep.id,
+            ordinal=1,
+            requirement_id=requirements[0].id,
+            question="first question",
+            why_they_will_ask="why",
+            how_to_frame="how",
+            evidence_ids=[],
+        )
+    )
+    await session.flush()
+
+    session.add(
+        PrepQuestion(
+            interview_prep_id=prep.id,
+            ordinal=1,
+            requirement_id=requirements[0].id,
+            question="second question, same ordinal",
+            why_they_will_ask="why",
+            how_to_frame="how",
+            evidence_ids=[],
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        await session.flush()

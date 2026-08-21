@@ -10,7 +10,13 @@ generated from (``analysis/engine.py``'s persisted output) -- see
 ``ChatMessage`` (``models/chat.py``'s docstring): every question for one
 prep is written in a single transaction, so Postgres' ``now()`` -- constant
 for the whole transaction -- ties every row's ``created_at``, leaving
-relative order a coin flip without an explicit ordinal.
+relative order a coin flip without an explicit ordinal. It carries the same
+``UniqueConstraint`` + index backing ``ChatMessage.ordinal`` does
+(``UniqueConstraint("session_id", "ordinal")`` there,
+``UniqueConstraint("interview_prep_id", "ordinal")`` here): nothing today
+writes a second batch of questions for one prep, but the constraint is what
+turns a future write path doing so with a bug into an ``IntegrityError``
+instead of two rows silently sharing a display position.
 
 ``evidence_ids`` is a plain Postgres array of UUIDs, not a join table like
 ``match_evidence``: a prep question's citations are only ever read back with
@@ -24,7 +30,7 @@ that column is ``jsonb`` instead.
 
 import uuid
 
-from sqlalchemy import ForeignKey, Integer, String, Text
+from sqlalchemy import ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -57,6 +63,10 @@ class InterviewPrep(Base, UUIDPrimaryKey, TimestampedAt):
 
 class PrepQuestion(Base, UUIDPrimaryKey, TimestampedAt):
     __tablename__ = "prep_questions"
+    __table_args__ = (
+        UniqueConstraint("interview_prep_id", "ordinal"),
+        Index("ix_prep_questions_interview_prep_id_ordinal", "interview_prep_id", "ordinal"),
+    )
 
     interview_prep_id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("interview_preps.id", ondelete="CASCADE"), nullable=False

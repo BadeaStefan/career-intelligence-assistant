@@ -86,7 +86,16 @@ export function App() {
           onAddJob={() => handlePaste("job")}
         />
         <section className="center-column">
-          {!resume ? <WorkspaceEmptyState onChooseFile={() => resumeInput.current?.click()} onFile={(file) => handleUpload(file, "resume")} onPaste={() => handlePaste("resume")} /> : analysis ? <AnalysisPane analysis={analysis} onPastePosting={() => handlePaste("job")} retryPending={analysisDetail.retry.isPending} /> : <NoJobState onAddJob={() => handlePaste("job")} />}
+          {!resume ? <WorkspaceEmptyState onChooseFile={() => resumeInput.current?.click()} onFile={(file) => handleUpload(file, "resume")} onPaste={() => handlePaste("resume")} /> : analysis ? (
+            <AnalysisPane
+              analysis={analysis}
+              onPastePosting={() => handlePaste("job")}
+              retryPending={analysisDetail.retry.isPending}
+              prepGenerationFailed={prep.isGenerateError}
+              onRetryPrep={() => prep.generate.mutate()}
+              prepRetryPending={prep.generate.isPending}
+            />
+          ) : <NoJobState onAddJob={() => handlePaste("job")} />}
           <TraceDrawer connected={false} />
         </section>
         <ChatDock

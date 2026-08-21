@@ -6,7 +6,9 @@ fit analysis already linked via match_evidence -- see career_intel.prep.
 service's module docstring. ordinal exists for the same reason
 chat_messages.ordinal does (career_intel.models.chat's docstring): every
 question for one prep is written in a single transaction, so created_at
-cannot order them.
+cannot order them -- and, like chat_messages, it carries a matching
+UniqueConstraint + composite index rather than relying on application code
+alone to keep ordinals unique per prep.
 
 Named 0007, not 0006 -- 0006 is already taken by Task 18's chat migration.
 
@@ -78,9 +80,18 @@ def upgrade() -> None:
             ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_prep_questions")),
+        sa.UniqueConstraint(
+            "interview_prep_id", "ordinal", name=op.f("uq_prep_questions_interview_prep_id")
+        ),
+    )
+    op.create_index(
+        "ix_prep_questions_interview_prep_id_ordinal",
+        "prep_questions",
+        ["interview_prep_id", "ordinal"],
     )
 
 
 def downgrade() -> None:
+    op.drop_index("ix_prep_questions_interview_prep_id_ordinal", table_name="prep_questions")
     op.drop_table("prep_questions")
     op.drop_table("interview_preps")
