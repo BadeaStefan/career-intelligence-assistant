@@ -32,6 +32,12 @@ dev = [
     # "scanned" case (a page with no text layer) is expressed as code rather
     # than as an opaque file nobody can inspect in review.
     "reportlab>=4.2",
+    # Only the compose contract test reads YAML. It arrives transitively via
+    # uvicorn[standard], but a test that asserts the deployment config is
+    # correct must not depend on another package happening to pull in its
+    # parser.
+    "pyyaml>=6.0",
+    "types-PyYAML>=6.0",
 ]
 
 [build-system]

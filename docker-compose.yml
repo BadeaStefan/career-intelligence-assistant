@@ -17,7 +17,10 @@ services:
       - db_data:/var/lib/postgresql/data
       - ./infra/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d career_intel"]
+      # Interpolated, not literal: `api` waits on service_healthy, so a check
+      # probing a role the POSTGRES_* overrides renamed would not merely
+      # report wrongly -- it would stop the API from ever starting.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-career_intel}"]
       interval: 2s
       timeout: 3s
       retries: 15
@@ -32,6 +35,11 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      # Every Settings field must appear here. One that does not is not
+      # merely undocumented -- it silently falls back to its Python default
+      # in the container, whatever .env says. See
+      # tests/unit/test_compose_env_contract.py.
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-5242880}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
