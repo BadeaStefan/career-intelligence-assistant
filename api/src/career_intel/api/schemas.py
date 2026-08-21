@@ -84,3 +84,29 @@ class AnalysisDetail(BaseModel):
     status: FitAnalysisStatus
     overall_score: float | None
     matches: list[RequirementMatchSummary]
+
+
+class CreateSessionRequest(BaseModel):
+    job_doc_id: uuid.UUID | None = None
+
+
+class SessionSummary(BaseModel):
+    """``POST /chat/sessions``' response -- just the id the client sends
+    ``POST .../messages`` requests to next."""
+
+    id: uuid.UUID
+
+
+class SendMessageRequest(BaseModel):
+    content: str = Field(min_length=1)
+    scope: Literal["job", "all"]
+
+
+class MessageSummary(BaseModel):
+    """One row of ``GET /chat/sessions/{id}/messages``, carrying the scope
+    it was asked/answered under (spec §6: scope lives per message)."""
+
+    role: Literal["user", "assistant"]
+    content: str
+    scope: Literal["job", "all"]
+    citations: list[str]

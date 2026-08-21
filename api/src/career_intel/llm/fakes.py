@@ -64,3 +64,18 @@ class FakeLLM:
         if not self._text_queue:
             raise RuntimeError("FakeLLM: no queued text response left")
         return self._text_queue.pop(0)
+
+    @property
+    def last_user_prompt(self) -> str | None:
+        return self.calls[-1]["user"] if self.calls else None
+
+    @property
+    def last_system_prompt(self) -> str | None:
+        return self.calls[-1]["system"] if self.calls else None
+
+    @property
+    def call_count(self) -> int:
+        return len(self.calls)
+
+    def queue_text(self, text: str) -> None:
+        self._text_queue.append(text)

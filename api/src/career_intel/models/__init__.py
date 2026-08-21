@@ -6,6 +6,7 @@ from career_intel.models.analysis import (
     RequirementVerdictValue,
 )
 from career_intel.models.base import Base
+from career_intel.models.chat import ChatMessage, ChatRole, ChatScope, ChatSession
 from career_intel.models.chunk import Chunk
 from career_intel.models.document import (
     Document,
@@ -19,6 +20,10 @@ from career_intel.models.telemetry import LlmCall, LlmCallStatus, RetrievalTrace
 
 __all__ = [
     "Base",
+    "ChatMessage",
+    "ChatRole",
+    "ChatScope",
+    "ChatSession",
     "Chunk",
     "Document",
     "DocumentKind",

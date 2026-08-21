@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI
 
-from career_intel.api.routes import analyses, documents
+from career_intel.api.routes import analyses, chat, documents
 from career_intel.db import get_session_factory
 from career_intel.ingest.pipeline import fail_orphaned_pending_rows
 from career_intel.observability import RequestIdMiddleware, configure_logging
@@ -37,6 +37,7 @@ def create_app() -> FastAPI:
 
     app.include_router(documents.router)
     app.include_router(analyses.router)
+    app.include_router(chat.router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
