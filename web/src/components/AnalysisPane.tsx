@@ -12,6 +12,7 @@ export function AnalysisPane({
   prepGenerationFailed,
   onRetryPrep,
   prepRetryPending,
+  prepGenerating,
 }: {
   analysis: AnalysisView;
   onRetryExtraction?: () => void;
@@ -31,6 +32,12 @@ export function AnalysisPane({
   prepGenerationFailed?: boolean;
   onRetryPrep?: () => void;
   prepRetryPending?: boolean;
+  // Same convention again, for the third state the prep tab can be in.
+  // "Not analysed yet" and "generating right now" are not the same thing:
+  // POST /prep 409s unless the fit analysis is already ready, so while the
+  // request is in flight PrepPane's "questions will appear after fit
+  // analysis" copy states the opposite of what is true.
+  prepGenerating?: boolean;
 }) {
   if (analysis.status === "extraction-failed") return <ExtractionFailure analysis={analysis} onRetry={onRetryExtraction} onPaste={onPastePosting} />;
   if (analysis.status === "analysis-failed") return <AnalysisFailure analysis={analysis} retryPending={retryPending} />;
@@ -42,6 +49,7 @@ export function AnalysisPane({
       prepGenerationFailed={prepGenerationFailed}
       onRetryPrep={onRetryPrep}
       prepRetryPending={prepRetryPending}
+      prepGenerating={prepGenerating}
     />
   );
 }
@@ -51,11 +59,13 @@ function ReadyAnalysis({
   prepGenerationFailed,
   onRetryPrep,
   prepRetryPending,
+  prepGenerating,
 }: {
   analysis: Extract<AnalysisView, { status: "ready" }>;
   prepGenerationFailed?: boolean;
   onRetryPrep?: () => void;
   prepRetryPending?: boolean;
+  prepGenerating?: boolean;
 }) {
   const [tab, setTab] = useState<"analysis" | "prep">("analysis");
   const [open, setOpen] = useState<Record<string, boolean>>({});
@@ -92,12 +102,30 @@ function ReadyAnalysis({
             ))}
           </div>
         ) : prepGenerationFailed ? (
+          // Checked before `prepGenerating`: a retry of a failed generation
+          // sets both at once, and a retry in flight must still read as a
+          // recovery from a failure, not as a first attempt.
           <PrepGenerationFailure onRetry={onRetryPrep} retryPending={prepRetryPending} />
+        ) : prepGenerating ? (
+          <PrepGenerating />
         ) : (
           <PrepPane questions={analysis.prepQuestions} />
         )}
       </div>
     </section>
+  );
+}
+
+// Same shell as PrepPane's own empty state -- this replaces that state
+// rather than sitting beside it, so it should not arrive looking like a
+// different kind of surface.
+function PrepGenerating() {
+  return (
+    <div className="availability-state compact">
+      <p className="eyebrow">Interview preparation</p>
+      <h2>Generating interview questions…</h2>
+      <p>The prep service is deriving questions from this posting's finished requirement verdicts. They will appear here when it returns.</p>
+    </div>
   );
 }
 

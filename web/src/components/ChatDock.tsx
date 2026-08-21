@@ -15,6 +15,11 @@ interface ChatDockProps {
   messages?: MessageSummary[];
   onSend?: (content: string, scope: ChatScope) => void;
   sending?: boolean;
+  // Optional notification for a caller that wants to do something *else*
+  // with a clicked citation (a resume viewer that scrolls to
+  // `char_start`/`char_end`, say). Showing the cited text is not that
+  // caller's job: the dock does it itself, below, so a citation chip is
+  // never a control that looks clickable and does nothing.
   onCitationClick?: (citation: Citation) => void;
 }
 
@@ -30,9 +35,19 @@ export function ChatDock({
   sending = false,
   onCitationClick,
 }: ChatDockProps) {
-  const [scope, setScope] = useState<"job" | "all">(jobCompany && !forceAllJobs ? "job" : "all");
+  // `undefined` means "the user hasn't chosen", not "all jobs". The
+  // distinction matters because App.tsx selects the active job in an effect:
+  // on the first render after loading finishes, `jobCompany` is still
+  // undefined and arrives a render later. A `useState` initialiser reading
+  // `jobCompany` would run once, capture "all", and never re-evaluate --
+  // leaving the dock scoped to every job while the pane beside it shows one,
+  // and sending the user's first question under a scope they never picked.
+  // Deriving the default on every render until an explicit choice exists
+  // fixes that without letting a later re-render overwrite a real choice.
+  const [scope, setScope] = useState<ChatScope | undefined>(undefined);
+  const [openCitation, setOpenCitation] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  const effectiveScope = forceAllJobs ? "all" : scope;
+  const effectiveScope: ChatScope = forceAllJobs ? "all" : (scope ?? (jobCompany ? "job" : "all"));
   const composerDisabled = !connected || sending;
 
   const submit = (content: string) => {
@@ -60,18 +75,42 @@ export function ChatDock({
             <p>{message.content}</p>
             {message.citations.length > 0 && (
               <div className="chat-citations">
-                {message.citations.map((citation) => (
-                  <button
-                    type="button"
-                    key={citation.handle}
-                    className="chat-citation"
-                    onClick={() => onCitationClick?.(citation)}
-                  >
-                    [{citation.handle}]
-                  </button>
-                ))}
+                {message.citations.map((citation) => {
+                  // Keyed by message *and* handle: "c1" is assigned per
+                  // retrieval call, so the same handle recurs across turns
+                  // pointing at different chunks.
+                  const key = `${index}:${citation.handle}`;
+                  const expanded = openCitation === key;
+                  return (
+                    <button
+                      type="button"
+                      key={citation.handle}
+                      className={expanded ? "chat-citation active" : "chat-citation"}
+                      aria-expanded={expanded}
+                      onClick={() => {
+                        setOpenCitation(expanded ? null : key);
+                        onCitationClick?.(citation);
+                      }}
+                    >
+                      [{citation.handle}]
+                    </button>
+                  );
+                })}
               </div>
             )}
+            {/* The quote sits under the chips, collapsed until asked for --
+                same "show me where this came from" affordance PrepPane uses
+                for its evidence, and the same markup, so the two read alike.
+                Inlining every quote unconditionally would bury the answer
+                the citations belong to. */}
+            {message.citations
+              .filter((citation) => openCitation === `${index}:${citation.handle}`)
+              .map((citation) => (
+                <blockquote key={citation.handle} className="citation citation-neutral">
+                  <p className="citation-label">Cited from your resume · [{citation.handle}]</p>
+                  <p><mark className="highlight-neutral">{citation.text}</mark></p>
+                </blockquote>
+              ))}
           </div>
         ))}
       </div>

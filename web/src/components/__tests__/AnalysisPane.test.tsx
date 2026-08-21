@@ -132,6 +132,35 @@ describe("AnalysisPane", () => {
     expect(screen.getByRole("button", { name: /retry/i })).toBeDisabled();
   });
 
+  it("says generation is in flight rather than showing not-analysed-yet copy", async () => {
+    // POST /prep 409s unless the fit analysis is already ready, so while the
+    // request is in flight "questions will appear after fit analysis" is
+    // simply false -- the fit analysis is what triggered this call.
+    render(<AnalysisPane analysis={{ ...analysis, prepQuestions: [] }} prepGenerating />);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Interview Prep" }));
+
+    expect(screen.getByText(/generating interview questions/i)).toBeInTheDocument();
+    expect(screen.queryByText(/questions will appear after fit analysis/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /question generation failed/i })).not.toBeInTheDocument();
+  });
+
+  it("prefers the failure state over the generating state when a retry is in flight", async () => {
+    // usePrep's retry sets both flags at once (isGenerateError stays true
+    // until the retry resolves). A retry must not read as a first attempt.
+    render(
+      <AnalysisPane
+        analysis={{ ...analysis, prepQuestions: [] }}
+        prepGenerationFailed
+        prepGenerating
+        onRetryPrep={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("tab", { name: "Interview Prep" }));
+    expect(screen.getByRole("heading", { name: /question generation failed/i })).toBeInTheDocument();
+  });
+
   it("renders the normal prep questions when generation has not failed", async () => {
     render(<AnalysisPane analysis={analysis} prepGenerationFailed={false} />);
 

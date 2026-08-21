@@ -92,6 +92,13 @@ export interface Citation {
   chunk_id: string;
   char_start: number;
   char_end: number;
+  /**
+   * The cited excerpt itself. Carried on the citation because the API never
+   * serialises a document's `raw_text` (it is PII), so a span alone is not
+   * something a client can resolve back into words -- the same reason
+   * `EvidenceSummary` carries its quote.
+   */
+  text: string;
 }
 
 /** Mirrors the API's SessionSummary -- `POST /chat/sessions`' response. */

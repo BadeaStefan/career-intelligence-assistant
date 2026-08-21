@@ -94,6 +94,12 @@ export function App() {
               prepGenerationFailed={prep.isGenerateError}
               onRetryPrep={() => prep.generate.mutate()}
               prepRetryPending={prep.generate.isPending}
+              // Both halves of "prep is on its way": the GET that decides
+              // whether anything exists yet, and the POST usePrep fires
+              // automatically once that GET confirms a 404. Either one in
+              // flight means the tab must not claim questions are waiting on
+              // a fit analysis that has, by this point, already finished.
+              prepGenerating={prep.generate.isPending || prep.isLoading}
             />
           ) : <NoJobState onAddJob={() => handlePaste("job")} />}
           <TraceDrawer connected={false} />
