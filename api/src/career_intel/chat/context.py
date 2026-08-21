@@ -164,7 +164,7 @@ def _format_analysis(
         return f"{header}: no fit analysis yet"
 
     score_pct = round((analysis.overall_score or 0.0) * 100)
-    lines = []
+    lines: list[str] = []
     if analysis.summary:
         lines.append(analysis.summary)
     for match, requirement in matches:
@@ -181,9 +181,12 @@ def _format_analysis(
     # "untrusted data" markers on the job spec and the resume chunks is being
     # taught that content *outside* a marker is trusted.
     #
-    # The header (title/company, verdict counts, the arithmetic score) stays
-    # outside: it is this service's own framing of the row, not the posting's
-    # words. Verdicts and importances are enum values, not free text.
+    # The header line stays outside, matching _format_job_spec, which also
+    # delimits only the posting body and leaves its own "Job: <title> at
+    # <company>" line above the marker. Title and company are short identity
+    # fields the user typed into a form, and the score is Python's arithmetic
+    # (non-negotiable #8) -- this system's own statement about the row, which
+    # is exactly what the delimiters mark content as *not* being.
     header_line = f"{header} -- fit score {score_pct}%"
     if not lines:
         return header_line
