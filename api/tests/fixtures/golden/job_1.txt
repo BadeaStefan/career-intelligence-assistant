@@ -1,0 +1,9 @@
+Senior Backend Engineer — Northstar
+
+Required:
+- Strong production Python experience.
+- Experience designing distributed systems.
+- Hands-on PostgreSQL performance work.
+
+Preferred:
+- Experience operating Kubernetes clusters.

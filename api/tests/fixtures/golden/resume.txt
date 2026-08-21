@@ -1,0 +1,13 @@
+Alex Morgan
+Backend and distributed systems engineer
+
+Skills: Python, PostgreSQL, AWS, React.
+
+Experience
+- Built Python services that processed 40 million events per day.
+- Designed distributed systems with idempotent workers and durable queues.
+- Tuned PostgreSQL queries and reduced reporting latency by 60 percent.
+- Deployed containerised services to AWS ECS with monitored rollbacks.
+- Built an internal React dashboard for operations teams.
+
+Alex has not used Kubernetes, Terraform, or Rust professionally.
