@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from career_intel.chat.service import ChatService
+from career_intel.chat.service import ChatService, create_session, list_messages
 from career_intel.constants import EMBEDDING_DIM
 from career_intel.llm.fakes import FakeEmbedder, FakeLLM
 from career_intel.models import ChatMessage, ChatSession, Chunk, Document, Requirement
@@ -183,17 +183,35 @@ async def test_valid_citation_handles_survive(
 ) -> None:
     """The mirror image of the invented-handle test: a handle that *was*
     offered must survive validation, proving the drop above is really about
-    validity and not e.g. every citation always being stripped."""
-    await _seed_resume(session, chunk_count=2)
+    validity and not e.g. every citation always being stripped.
+
+    Also proves the citation is mapped to a real span, not just the bare
+    handle string -- and that the handle the model cited was genuinely
+    visible in the prompt it was sent, i.e. the offered-handle set and the
+    prompt content come from the same retrieval call."""
+    resume = await _seed_resume(session, chunk_count=2)
     job = await _seed_job(session)
     chat_session = await _seed_chat_session(session, job_doc_id=job.id)
+    chunk_ids = set(
+        (await session.execute(select(Chunk.id).where(Chunk.document_id == resume.id)))
+        .scalars()
+        .all()
+    )
 
     fake_llm = FakeLLM(text_responses=["You know Python [c1]."])
     service = ChatService(session, llm=fake_llm, embedder=embedder)
 
     reply = await service.send(chat_session.id, content="Do I know Python?", scope="job")
 
-    assert reply.citations == ["c1"]
+    assert "[c1]" in (fake_llm.last_user_prompt or "")
+
+    assert len(reply.citations) == 1
+    citation = reply.citations[0]
+    assert citation.handle == "c1"
+    assert citation.document_id == resume.id
+    assert citation.chunk_id in chunk_ids
+    assert citation.char_start == 0
+    assert citation.char_end == len("resume chunk 0")
 
 
 async def test_no_evidence_yields_explicit_absence_not_invention(
@@ -263,6 +281,11 @@ async def test_message_row_persists_the_scope_it_was_asked_under(
     assert assistant_row.scope == "all"
     assert assistant_row.content == "Hello!"
 
+    # created_at is constant across one commit's transaction (Postgres
+    # now()), so ordering by created_at alone cannot be trusted to put the
+    # question before its own answer -- ordinal is what guarantees it.
+    assert row.ordinal < assistant_row.ordinal
+
 
 async def test_send_raises_for_unknown_session(
     session: AsyncSession, embedder: FakeEmbedder
@@ -274,14 +297,26 @@ async def test_send_raises_for_unknown_session(
         await service.send(uuid4(), content="hi", scope="all")
 
 
+async def test_send_raises_for_job_scope_without_a_bound_job(
+    session: AsyncSession, embedder: FakeEmbedder
+) -> None:
+    """A session opened without a job (e.g. straight into "all jobs" scope)
+    has no job to scope a "job"-scoped question to -- build_context's own
+    validation, surfaced through the service."""
+    chat_session = await _seed_chat_session(session, job_doc_id=None)
+    fake_llm = FakeLLM()
+    service = ChatService(session, llm=fake_llm, embedder=embedder)
+
+    with pytest.raises(ValueError):
+        await service.send(chat_session.id, content="how do I fit?", scope="job")
+
+
 # ---------------------------------------------------------------------------
 # Session lifecycle helpers
 # ---------------------------------------------------------------------------
 
 
 async def test_create_session_binds_the_optional_job_doc_id(session: AsyncSession) -> None:
-    from career_intel.chat.service import create_session
-
     job = await _seed_job(session)
 
     created = await create_session(session, job_doc_id=job.id)
@@ -289,11 +324,14 @@ async def test_create_session_binds_the_optional_job_doc_id(session: AsyncSessio
     assert created.job_doc_id == job.id
 
 
+async def test_list_messages_raises_for_unknown_session(session: AsyncSession) -> None:
+    with pytest.raises(LookupError):
+        await list_messages(session, uuid4())
+
+
 async def test_list_messages_returns_history_in_order(
     session: AsyncSession, embedder: FakeEmbedder
 ) -> None:
-    from career_intel.chat.service import list_messages
-
     await _seed_resume(session)
     job = await _seed_job(session)
     chat_session = await _seed_chat_session(session, job_doc_id=job.id)

@@ -19,7 +19,7 @@ from career_intel.api.schemas import (
     SessionSummary,
 )
 from career_intel.chat import service
-from career_intel.chat.service import ChatReply, ChatService
+from career_intel.chat.service import ChatReply, ChatService, Citation
 from career_intel.config import get_settings
 from career_intel.db import get_session, get_session_factory
 from career_intel.llm.openai_client import OpenAIClient
@@ -39,10 +39,9 @@ async def create_session(payload: CreateSessionRequest, session: SessionDep) -> 
 async def send_message(
     session_id: uuid.UUID, payload: SendMessageRequest, session: SessionDep
 ) -> ChatReply:
-    # Built per request, from settings -- mirrors
-    # analysis/service.py::run_fit_analysis_background's real-client wiring.
-    # Built lazily internally (OpenAIClient's own docstring), so constructing
-    # it here makes no network call by itself.
+    # Built fresh per request, from settings -- OpenAIClient builds its raw
+    # SDK client lazily on first real call (its own docstring), so
+    # constructing it here makes no network call by itself.
     llm = OpenAIClient(session_factory=get_session_factory(), settings=get_settings())
     chat_service = ChatService(session, llm=llm, embedder=llm)
 
@@ -56,10 +55,17 @@ async def send_message(
 
 @router.get("/sessions/{session_id}/messages", response_model=list[MessageSummary])
 async def get_messages(session_id: uuid.UUID, session: SessionDep) -> list[MessageSummary]:
-    rows = await service.list_messages(session, session_id)
+    try:
+        rows = await service.list_messages(session, session_id)
+    except LookupError as error:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+
     return [
         MessageSummary(
-            role=row.role, content=row.content, scope=row.scope, citations=row.citations
+            role=row.role,
+            content=row.content,
+            scope=row.scope,
+            citations=[Citation.model_validate(c) for c in row.citations],
         )
         for row in rows
     ]

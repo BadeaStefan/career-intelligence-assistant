@@ -59,6 +59,25 @@ class Turn:
     content: str
 
 
+@dataclass(frozen=True)
+class ChatContext:
+    """``build_context``'s return value.
+
+    ``text`` is the assembled prompt, ready to hand an LLM as-is. ``chunks``
+    is the *same* ``ChunkCandidate`` list rendered into ``text`` -- returned
+    alongside it, not re-fetched, so a caller offering citation handles to a
+    model is guaranteed to offer exactly the chunks the model actually read
+    rather than a second, independently-retrieved (and only incidentally
+    identical) set (Task 18). ``resume_doc_id`` is the resume those chunks
+    came from, or ``None`` if no resume exists yet -- carried here so a
+    caller can attach a citation's owning document without another query.
+    """
+
+    text: str
+    chunks: list[ChunkCandidate]
+    resume_doc_id: UUID | None
+
+
 def _delimit(raw_text: str) -> str:
     return f"{_DOCUMENT_DELIMITER}\n{raw_text}\n{_DOCUMENT_DELIMITER}"
 
@@ -159,7 +178,12 @@ def _format_analysis(
 def _format_chunks(chunks: Sequence[ChunkCandidate]) -> str:
     if not chunks:
         return ""
-    blocks = "\n".join(_delimit(chunk.text) for chunk in chunks)
+    # Each chunk is labelled with its retrieval handle (e.g. "[c1]") right
+    # before its delimited text -- Task 18's chat service asks the model to
+    # cite claims using this exact handle, so the handle has to be visible
+    # in the prompt, inside the same untrusted-data-delimited block as the
+    # text it labels (not a separate, undelimited block elsewhere).
+    blocks = "\n".join(f"[{chunk.handle}] {_delimit(chunk.text)}" for chunk in chunks)
     return f"Resume excerpts most relevant to the question:\n{blocks}"
 
 
@@ -250,8 +274,13 @@ async def build_context(
     question: str,
     history: Sequence[Turn],
     embedder: Embedder,
-) -> str:
+) -> ChatContext:
     """Assemble the prompt context for one chat turn. Read-only, no LLM call.
+
+    Returns the retrieved resume chunks alongside the assembled text (see
+    ``ChatContext``) -- Task 18's chat service needs the *same* candidates
+    it just put in the prompt to offer as citation handles, not a second,
+    independently-retrieved set that only happens to match by coincidence.
 
     Raises ``ValueError`` if ``scope == "job"`` and ``job_doc_id`` is
     ``None``, or if ``job_doc_id`` does not resolve to a job document.
@@ -293,6 +322,7 @@ async def build_context(
                     "Cached fit analyses, every job:\n\n" + "\n\n".join(blocks)
                 )
 
+    chunks: list[ChunkCandidate] = []
     if resume is not None:
         chunks = await nearest_chunks(
             session, document_id=resume.id, query_embedding=question_embedding
@@ -303,4 +333,8 @@ async def build_context(
 
     sections.append(f"Question: {question}")
 
-    return "\n\n".join(sections)
+    return ChatContext(
+        text="\n\n".join(sections),
+        chunks=chunks,
+        resume_doc_id=resume.id if resume is not None else None,
+    )

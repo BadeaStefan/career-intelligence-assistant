@@ -47,6 +47,7 @@ def upgrade() -> None:
         "chat_messages",
         sa.Column("id", sa.UUID(as_uuid=True), nullable=False),
         sa.Column("session_id", sa.UUID(as_uuid=True), nullable=False),
+        sa.Column("ordinal", sa.Integer(), nullable=False),
         sa.Column(
             "role",
             sa.Enum(
@@ -74,9 +75,16 @@ def upgrade() -> None:
             ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_chat_messages")),
+        sa.UniqueConstraint("session_id", "ordinal", name=op.f("uq_chat_messages_session_id")),
+    )
+    op.create_index(
+        "ix_chat_messages_session_id_ordinal",
+        "chat_messages",
+        ["session_id", "ordinal"],
     )
 
 
 def downgrade() -> None:
+    op.drop_index("ix_chat_messages_session_id_ordinal", table_name="chat_messages")
     op.drop_table("chat_messages")
     op.drop_table("chat_sessions")

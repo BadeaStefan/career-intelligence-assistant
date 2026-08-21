@@ -230,11 +230,11 @@ async def test_scope_job_includes_only_that_jobs_spec_and_analysis(
         embedder=embedder,
     )
 
-    assert "JOB-ONE-UNIQUE-TEXT" in context
-    assert "REQUIREMENT-ONE-UNIQUE" in context
-    assert "JOB-TWO-UNIQUE-TEXT" not in context
-    assert "REQUIREMENT-TWO-UNIQUE" not in context
-    assert "Globex" not in context
+    assert "JOB-ONE-UNIQUE-TEXT" in context.text
+    assert "REQUIREMENT-ONE-UNIQUE" in context.text
+    assert "JOB-TWO-UNIQUE-TEXT" not in context.text
+    assert "REQUIREMENT-TWO-UNIQUE" not in context.text
+    assert "Globex" not in context.text
 
 
 async def test_scope_all_includes_every_cached_analysis(
@@ -271,12 +271,12 @@ async def test_scope_all_includes_every_cached_analysis(
         embedder=embedder,
     )
 
-    assert "Acme" in context
-    assert "Globex" in context
-    assert "REQUIREMENT-ONE-UNIQUE" in context
-    assert "REQUIREMENT-TWO-UNIQUE" in context
-    assert "Summary for job one." in context
-    assert "Summary for job two." in context
+    assert "Acme" in context.text
+    assert "Globex" in context.text
+    assert "REQUIREMENT-ONE-UNIQUE" in context.text
+    assert "REQUIREMENT-TWO-UNIQUE" in context.text
+    assert "Summary for job one." in context.text
+    assert "Summary for job two." in context.text
 
 
 async def test_document_text_is_delimited(session: AsyncSession, embedder: FakeEmbedder) -> None:
@@ -295,8 +295,38 @@ async def test_document_text_is_delimited(session: AsyncSession, embedder: FakeE
         embedder=embedder,
     )
 
-    assert f"{_DOCUMENT_DELIMITER}\nJOB-SPEC-UNIQUE-TEXT\n{_DOCUMENT_DELIMITER}" in context
-    assert f"{_DOCUMENT_DELIMITER}\nCHUNK-UNIQUE-TEXT\n{_DOCUMENT_DELIMITER}" in context
+    assert f"{_DOCUMENT_DELIMITER}\nJOB-SPEC-UNIQUE-TEXT\n{_DOCUMENT_DELIMITER}" in context.text
+    assert f"{_DOCUMENT_DELIMITER}\nCHUNK-UNIQUE-TEXT\n{_DOCUMENT_DELIMITER}" in context.text
+
+
+async def test_returned_chunks_are_the_same_ones_rendered_into_the_text(
+    session: AsyncSession, embedder: FakeEmbedder
+) -> None:
+    """Task 18 offers ``context.chunks`` as citation handles -- they must be
+    exactly what the model was shown, not a second, independently-retrieved
+    set that only happens to match by coincidence."""
+    resume = await _seed_resume(session)
+    await _seed_chunk(session, document_id=resume.id, text="CHUNK-UNIQUE-TEXT")
+    job = await _seed_job(
+        session, title="Backend Engineer", company="Acme", raw_text="job raw text"
+    )
+
+    context = await build_context(
+        session,
+        scope="job",
+        job_doc_id=job.id,
+        question="What's my strongest match?",
+        history=[],
+        embedder=embedder,
+    )
+
+    assert context.resume_doc_id == resume.id
+    assert len(context.chunks) == 1
+    chunk = context.chunks[0]
+    assert chunk.text == "CHUNK-UNIQUE-TEXT"
+    # The handle labelling the chunk in the prompt text is the same handle
+    # on the returned candidate -- a caller can offer exactly this handle.
+    assert f"[{chunk.handle}]" in context.text
 
 
 async def test_build_context_includes_history_and_question(
@@ -319,9 +349,9 @@ async def test_build_context_includes_history_and_question(
         embedder=embedder,
     )
 
-    assert "EARLIER-USER-TURN" in context
-    assert "EARLIER-ASSISTANT-TURN" in context
-    assert "QUESTION-UNIQUE-MARKER" in context
+    assert "EARLIER-USER-TURN" in context.text
+    assert "EARLIER-ASSISTANT-TURN" in context.text
+    assert "QUESTION-UNIQUE-MARKER" in context.text
 
 
 async def test_scope_job_without_job_doc_id_raises(
@@ -360,4 +390,4 @@ async def test_scope_job_with_no_analysis_yet_still_includes_job_spec(
         embedder=embedder,
     )
 
-    assert "UNANALYSED-JOB-TEXT" in context
+    assert "UNANALYSED-JOB-TEXT" in context.text

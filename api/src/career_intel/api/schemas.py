@@ -11,6 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from career_intel.chat.service import Citation
 from career_intel.models import (
     DocumentKind,
     FitAnalysisStatus,
@@ -109,4 +110,4 @@ class MessageSummary(BaseModel):
     role: Literal["user", "assistant"]
     content: str
     scope: Literal["job", "all"]
-    citations: list[str]
+    citations: list[Citation]
