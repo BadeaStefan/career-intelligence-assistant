@@ -92,6 +92,48 @@ export function useAnalysisDetail(jobDocId: string | undefined) {
 }
 
 /**
+ * Bulk retry behind the top bar's one action. Deliberately built on the
+ * same per-job endpoint as `useAnalysisDetail`'s `retry` rather than a
+ * bulk one: the API refuses to recompute an analysis that is not
+ * `failed` (analyses.py `_require_failed_analysis`), because recomputing a
+ * good one costs money and can silently change verdicts. This retries the
+ * failures and nothing else.
+ *
+ * Two consequences of that endpoint, both handled here:
+ *
+ * - The candidate list comes from the analyses list query, which can be up
+ *   to one poll interval stale. A job that has since stopped being failed
+ *   answers 409 -- which is the state this button was trying to reach, not
+ *   an error to report.
+ * - Every request is settled before anything is reported, so one job's
+ *   rejection cannot abandon the jobs queued behind it.
+ */
+export function useRetryFailedAnalyses() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (jobDocIds: string[]) => {
+      const results = await Promise.allSettled(
+        jobDocIds.map((jobDocId) => apiClient.retryAnalysis(jobDocId)),
+      );
+
+      const rejected = results.filter(
+        (result): result is PromiseRejectedResult =>
+          result.status === "rejected" &&
+          !(result.reason instanceof ApiError && result.reason.status === 409),
+      );
+
+      const [firstRejection] = rejected;
+      if (firstRejection) throw firstRejection.reason;
+    },
+    // onSettled, not onSuccess: a partial failure still means some
+    // analyses flipped to pending server-side, so the rail has to refetch
+    // either way.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ANALYSES_KEY }),
+  });
+}
+
+/**
  * Mirrors `useDocuments`'s `hasPendingEnrichment`: a pure predicate the
  * caller (`App.tsx`) evaluates from the full picture it can see, to decide
  * whether `useAnalysisList` still has something to wait for. Three

@@ -140,6 +140,62 @@ describe("adding a job", () => {
   });
 });
 
+describe("retrying failed analyses", () => {
+  const failedJobs: DocumentSummary[] = [
+    { ...addedJob, id: "job-1" },
+    { ...addedJob, id: "job-2" },
+    { ...addedJob, id: "job-3" },
+  ];
+
+  function withFailures() {
+    vi.mocked(apiClient.listDocuments).mockResolvedValue([resume, ...failedJobs]);
+    vi.mocked(apiClient.listAnalyses).mockResolvedValue([
+      { job_doc_id: "job-1", title: null, company: null, status: "failed", overall_score: null },
+      { job_doc_id: "job-2", title: null, company: null, status: "ready", overall_score: 0.8 },
+      { job_doc_id: "job-3", title: null, company: null, status: "failed", overall_score: null },
+    ]);
+  }
+
+  it("retries every failed analysis and leaves the ready one alone", async () => {
+    withFailures();
+    vi.mocked(apiClient.retryAnalysis).mockResolvedValue();
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Retry 2 failed" }));
+
+    await waitFor(() => expect(apiClient.retryAnalysis).toHaveBeenCalledTimes(2));
+    expect(apiClient.retryAnalysis).toHaveBeenCalledWith("job-1");
+    expect(apiClient.retryAnalysis).toHaveBeenCalledWith("job-3");
+    expect(apiClient.retryAnalysis).not.toHaveBeenCalledWith("job-2");
+  });
+
+  it("offers nothing when no analysis has failed", async () => {
+    renderApp();
+
+    expect(await screen.findByText("0 jobs")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+  });
+
+  // The candidate list is up to one poll interval stale, so a job may have
+  // stopped being failed before the POST lands. The API answers that with
+  // 409 -- which is the outcome the button wanted, not something to alarm
+  // the user about.
+  it("reports a genuine failure but not a 409 from an already-retried job", async () => {
+    withFailures();
+    vi.mocked(apiClient.retryAnalysis).mockImplementation(async (jobDocId: string) => {
+      throw jobDocId === "job-1"
+        ? new ApiError("Only a failed analysis can be retried.", 409)
+        : new ApiError("Analysis service unavailable.", 503);
+    });
+    renderApp();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Retry 2 failed" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Analysis service unavailable.");
+    expect(screen.queryByText(/only a failed analysis/i)).not.toBeInTheDocument();
+  });
+});
+
 describe("deleting documents", () => {
   it("confirms and deletes a job from its rail action", async () => {
     vi.mocked(apiClient.listDocuments).mockResolvedValue([resume, addedJob]);
