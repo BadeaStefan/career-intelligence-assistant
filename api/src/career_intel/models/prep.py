@@ -1,5 +1,5 @@
 """``interview_preps`` and ``prep_questions``: interview questions derived
-from a completed fit analysis (Task 20, spec §7).
+from a completed fit analysis (Task 20, spec §6b).
 
 No new retrieval happens to build these: every requirement, verdict, and
 evidence unit a question can cite already exists in the fit analysis it was

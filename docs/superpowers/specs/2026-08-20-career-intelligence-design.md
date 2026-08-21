@@ -226,12 +226,15 @@ fit_analyses         resume_doc_id, job_doc_id, status(pending|ready|failed),
       └─ match_evidence    requirement_match_id, evidence_unit_id
 
 chat_sessions        id, job_doc_id (nullable), created_at
-  └─ chat_messages   session_id, role, content, scope(job|all), citations jsonb, created_at
+  └─ chat_messages   session_id, ordinal, role, content, scope(job|all),
+                     citations jsonb, created_at
+                                      UNIQUE(session_id, ordinal)
 
 interview_preps      fit_analysis_id, model, created_at
                                       UNIQUE(fit_analysis_id)
-  └─ prep_questions  interview_prep_id, requirement_id, question,
+  └─ prep_questions  interview_prep_id, ordinal, requirement_id, question,
                      why_they_will_ask, how_to_frame, evidence_ids[]
+                                      UNIQUE(interview_prep_id, ordinal)
 
 llm_calls            purpose, model, prompt_tokens, completion_tokens,
                      latency_ms, cost_usd, request_id, created_at

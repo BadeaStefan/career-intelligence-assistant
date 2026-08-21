@@ -29,7 +29,11 @@ from career_intel.ingest.parsing import (
     UnsupportedDocumentError,
     parse_document,
 )
-from career_intel.ingest.pipeline import enrich_document, list_documents
+from career_intel.ingest.pipeline import (
+    delete_existing_resumes,
+    enrich_document,
+    list_documents,
+)
 from career_intel.models import Document, DocumentKind
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -115,6 +119,14 @@ async def delete_document(document_id: uuid.UUID, session: SessionDep) -> None:
 async def _persist_and_enrich(
     session: AsyncSession, background_tasks: BackgroundTasks, document: Document
 ) -> Document:
+    # Spec §5: a new resume replaces the old one rather than joining it.
+    # Deleted in this same transaction as the insert, so there is no window
+    # in which zero resumes exist -- and none in which two do, which is the
+    # state the four "current resume" lookups across this codebase silently
+    # disagree about. Job documents accumulate; only resumes are singular.
+    if document.kind == "resume":
+        await delete_existing_resumes(session)
+
     session.add(document)
     await session.commit()
     await session.refresh(document)

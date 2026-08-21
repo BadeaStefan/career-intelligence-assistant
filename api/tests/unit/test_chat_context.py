@@ -299,6 +299,48 @@ async def test_document_text_is_delimited(session: AsyncSession, embedder: FakeE
     assert f"{_DOCUMENT_DELIMITER}\nCHUNK-UNIQUE-TEXT\n{_DOCUMENT_DELIMITER}" in context.text
 
 
+async def test_analysis_text_is_delimited(session: AsyncSession, embedder: FakeEmbedder) -> None:
+    """Requirement text is raw job-posting text -- the exact untrusted vector
+    the delimiter exists for. Selective delimiting inside one prompt is worse
+    than uniform absence: a model shown "untrusted data" markers on the job
+    spec and the resume chunks learns that everything *outside* a marker is
+    trusted, and the analysis block travelled that path unmarked."""
+    resume = await _seed_resume(session)
+    job = await _seed_job(
+        session, title="Backend Engineer", company="Acme", raw_text="job raw text"
+    )
+    await _seed_ready_analysis(
+        session,
+        resume_doc_id=resume.id,
+        job_doc_id=job.id,
+        requirement_text="REQUIREMENT-UNIQUE-TEXT",
+        rationale="RATIONALE-UNIQUE-TEXT",
+        summary="SUMMARY-UNIQUE-TEXT",
+    )
+
+    context = await build_context(
+        session,
+        scope="job",
+        job_doc_id=job.id,
+        question="How well do I fit?",
+        history=[],
+        embedder=embedder,
+    )
+
+    delimited = _delimited_blocks(context.text)
+    assert any("REQUIREMENT-UNIQUE-TEXT" in block for block in delimited)
+    assert any("RATIONALE-UNIQUE-TEXT" in block for block in delimited)
+    assert any("SUMMARY-UNIQUE-TEXT" in block for block in delimited)
+
+
+def _delimited_blocks(text: str) -> list[str]:
+    """Every span sitting between a pair of delimiter markers."""
+    parts = text.split(_DOCUMENT_DELIMITER)
+    # parts alternate outside/inside/outside/inside/... -- odd indexes are the
+    # delimited blocks.
+    return parts[1::2]
+
+
 async def test_returned_chunks_are_the_same_ones_rendered_into_the_text(
     session: AsyncSession, embedder: FakeEmbedder
 ) -> None:

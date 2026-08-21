@@ -1,4 +1,4 @@
-"""Interview-question generation from a completed fit analysis (Task 20, spec §7).
+"""Interview-question generation from a completed fit analysis (Task 20, spec §6b).
 
 No new retrieval: the candidate handle set offered to the model is built
 entirely from what ``run_fit_analysis`` already persisted -- each

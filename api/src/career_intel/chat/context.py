@@ -164,7 +164,7 @@ def _format_analysis(
         return f"{header}: no fit analysis yet"
 
     score_pct = round((analysis.overall_score or 0.0) * 100)
-    lines = [f"{header} -- fit score {score_pct}%"]
+    lines = []
     if analysis.summary:
         lines.append(analysis.summary)
     for match, requirement in matches:
@@ -172,7 +172,23 @@ def _format_analysis(
             f"- [{match.verdict}] ({requirement.importance}) {requirement.text}: "
             f"{match.rationale}"
         )
-    return "\n".join(lines)
+
+    # Delimited like every other document-derived block in this prompt.
+    # `requirement.text` is raw text lifted out of a pasted job posting --
+    # the exact untrusted vector the delimiter exists for -- and the summary
+    # and rationales are model output derived from it. Leaving this one block
+    # unmarked is worse than marking nothing at all: a model shown explicit
+    # "untrusted data" markers on the job spec and the resume chunks is being
+    # taught that content *outside* a marker is trusted.
+    #
+    # The header (title/company, verdict counts, the arithmetic score) stays
+    # outside: it is this service's own framing of the row, not the posting's
+    # words. Verdicts and importances are enum values, not free text.
+    header_line = f"{header} -- fit score {score_pct}%"
+    if not lines:
+        return header_line
+    body = "\n".join(lines)
+    return f"{header_line}\n{_delimit(body)}"
 
 
 def _format_chunks(chunks: Sequence[ChunkCandidate]) -> str:

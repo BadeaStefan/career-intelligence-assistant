@@ -212,6 +212,11 @@ async def test_valid_citation_handles_survive(
     assert citation.chunk_id in chunk_ids
     assert citation.char_start == 0
     assert citation.char_end == len("resume chunk 0")
+    # The cited text travels with the citation. Without it a client holds a
+    # chunk id and a span but nothing to *show* -- the citation renders as an
+    # inert handle, which is exactly what the fit engine's evidence shape
+    # already avoids by carrying its quote directly.
+    assert citation.text == "resume chunk 0"
 
 
 async def test_no_evidence_yields_explicit_absence_not_invention(
@@ -250,6 +255,28 @@ async def test_system_prompt_carries_the_off_topic_redirect_rule(
     assert fake_llm.last_system_prompt is not None
     assert "only about" in fake_llm.last_system_prompt.lower()
     # Behavioural check runs live in Task 21; unit tests assert the rule ships.
+
+
+async def test_untrusted_data_notice_names_every_delimited_block(
+    session: AsyncSession, embedder: FakeEmbedder
+) -> None:
+    """The notice has to describe what is actually delimited. Naming only
+    "job posting and resume text" while the analysis block is delimited too
+    leaves the model to guess which markers it was told about."""
+    await _seed_resume(session)
+    job = await _seed_job(session)
+    chat_session = await _seed_chat_session(session, job_doc_id=job.id)
+
+    fake_llm = FakeLLM(text_responses=["Sure."])
+    service = ChatService(session, llm=fake_llm, embedder=embedder)
+
+    await service.send(chat_session.id, content="how do I fit?", scope="job")
+
+    assert fake_llm.last_system_prompt is not None
+    notice = fake_llm.last_system_prompt.lower()
+    assert "job posting" in notice
+    assert "resume" in notice
+    assert "analysis" in notice
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@
 Mirrors ``analysis/schemas.py``'s ``RequirementVerdict``/``MatchBatchResult``
 pairing: short handles, not UUIDs, survive tokenisation, and every citation
 the model returns is validated in Python (``analysis/validation.py``) rather
-than trusted (spec §7).
+than trusted (spec §6b).
 """
 
 from pydantic import BaseModel

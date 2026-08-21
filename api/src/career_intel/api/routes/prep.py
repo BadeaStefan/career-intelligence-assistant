@@ -5,7 +5,7 @@ resolves ``job_doc_id`` -> the ``FitAnalysis`` it belongs to, translates
 status into HTTP codes, and serialises -- generation, validation, and
 persistence all live in ``prep/service.py``.
 
-Generation is a POST, reading is a GET (spec §7): a generating GET would be
+Generation is a POST, reading is a GET (spec §6b): a generating GET would be
 non-idempotent -- TanStack Query's refetch-on-focus or a double-click would
 fire two concurrent generations that race the ``UNIQUE(fit_analysis_id)``
 constraint and bill two LLM calls. The POST handles that race itself
